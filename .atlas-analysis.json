@@ -1,0 +1,119 @@
+{
+  "projectType": "saas",
+  "projectName": "SpecKit Ticketing Platform",
+  "projectDescription": "Distributed event ticketing platform with microservices architecture, CQRS, and event-driven design for high-availability ticket sales.",
+  "theme": "aspen",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/microservices",
+              "concepts/event-driven",
+              "concepts/cqrs",
+              "concepts/hexagonal-architecture"
+            ]
+          },
+          {
+            "group": "Services",
+            "pages": [
+              "services/catalog",
+              "services/inventory",
+              "services/ordering",
+              "services/payment",
+              "services/fulfillment",
+              "services/notification",
+              "services/identity"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/deployment",
+              "guides/frontend-integration",
+              "guides/testing-strategy",
+              "guides/kafka-events"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Catalog API",
+            "pages": [
+              "api/catalog/get-events",
+              "api/catalog/get-event",
+              "api/catalog/get-seatmap"
+            ]
+          },
+          {
+            "group": "Inventory API",
+            "pages": [
+              "api/inventory/create-reservation",
+              "api/inventory/get-reservation"
+            ]
+          },
+          {
+            "group": "Ordering API",
+            "pages": [
+              "api/ordering/add-to-cart",
+              "api/ordering/checkout",
+              "api/ordering/get-order"
+            ]
+          },
+          {
+            "group": "Payment API",
+            "pages": [
+              "api/payment/process-payment"
+            ]
+          },
+          {
+            "group": "Fulfillment API",
+            "pages": [
+              "api/fulfillment/get-ticket"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Event catalog with seat management",
+    "Distributed seat reservation with Redis locks",
+    "Event-driven order processing via Kafka",
+    "CQRS pattern for read/write separation",
+    "Hexagonal architecture for maintainability",
+    "Multi-service microservices design",
+    "Async ticket fulfillment pipeline",
+    "Real-time reservation expiration handling"
+  ],
+  "publicApiSurface": [
+    "GET /events - List all events",
+    "GET /events/{id} - Get event details",
+    "GET /events/{id}/seatmap - Get event with seat availability",
+    "POST /reservations - Reserve a seat (30min TTL)",
+    "GET /reservations/{id} - Get reservation status",
+    "POST /cart/add - Add reserved seat to cart",
+    "POST /orders/checkout - Finalize order and trigger payment",
+    "GET /orders/{id} - Get order details",
+    "POST /payments - Process payment",
+    "GET /tickets/{orderId} - Retrieve issued tickets"
+  ]
+}
