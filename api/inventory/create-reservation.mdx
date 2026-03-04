@@ -1,0 +1,334 @@
+---
+title: 'Create Reservation'
+api: 'POST http://localhost:50002/reservations'
+description: 'Reserve a seat with a 15-minute TTL using distributed Redis locking'
+---
+
+## Overview
+
+Creates a seat reservation with automatic expiration after 15 minutes. This endpoint uses a distributed Redis lock mechanism to prevent double-booking and ensure thread-safety across multiple service instances.
+
+<Warning>
+  **Important timing requirement**: After creating a reservation, you must wait 2-3 seconds for the Kafka `reservation-created` event to be processed before adding the seat to the cart. Failing to wait will result in a "Reservation not found" error.
+</Warning>
+
+## Implementation Details
+
+### Redis Lock Mechanism
+
+The reservation process uses a distributed lock with the following characteristics:
+
+- **Lock key pattern**: `lock:seat:{seatId}`
+- **Lock TTL**: 30 seconds
+- **Lock implementation**: Redis `SET NX` with token-based release
+- **Concurrency control**: Prevents race conditions during seat reservation
+
+From `CreateReservationCommandHandler.cs:19-21,41-48`:
+```csharp
+private const string RedisLockKeyPrefix = "lock:seat:";
+private const int LockExpirySeconds = 30;
+private const int ReservationTTLMinutes = 15;
+
+var lockKey = $"{RedisLockKeyPrefix}{request.SeatId:N}";
+var lockToken = await _redisLock.AcquireLockAsync(lockKey, TimeSpan.FromSeconds(LockExpirySeconds));
+
+if (lockToken is null)
+{
+    throw new InvalidOperationException($"Could not acquire lock for seat {request.SeatId}. Seat may be reserved or locked.");
+}
+```
+
+### Kafka Event Publishing
+
+After successfully creating a reservation, the service publishes a `reservation-created` event to Kafka:
+
+- **Topic**: `reservation-created`
+- **Key**: `{seatId}` (ensures ordering per seat)
+- **Event processing time**: ~2-3 seconds
+- **Consumer**: Ordering service listens for this event
+
+From `CreateReservationCommandHandler.cs:105-127`:
+```csharp
+private async Task PublishReservationCreatedEvent(Reservation reservation, Seat seat, CancellationToken cancellationToken)
+{
+    var @event = new ReservationCreatedEvent(
+        EventId: Guid.NewGuid().ToString("D"),
+        ReservationId: reservation.Id.ToString("D"),
+        CustomerId: reservation.CustomerId,
+        SeatId: reservation.SeatId.ToString("D"),
+        SeatNumber: $"{seat.Section}-{seat.Row}-{seat.Number}",
+        Section: seat.Section,
+        BasePrice: 0m,
+        CreatedAt: reservation.CreatedAt.ToString("O"),
+        ExpiresAt: reservation.ExpiresAt.ToString("O"),
+        Status: reservation.Status
+    );
+
+    var json = JsonSerializer.Serialize(@event, jsonOptions);
+    await _kafkaProducer.ProduceAsync("reservation-created", json, reservation.SeatId.ToString("N"));
+}
+```
+
+## Request
+
+### Body Parameters
+
+<ParamField body="seatId" type="string" required>
+  UUID of the seat to reserve. Must be a valid GUID format and correspond to an existing seat.
+  
+  Example: `"550e8400-e29b-41d4-a716-446655440002"`
+</ParamField>
+
+<ParamField body="customerId" type="string" required>
+  Identifier for the customer making the reservation. Can be a user ID, email address, or any unique customer identifier.
+  
+  Examples: `"customer-123"`, `"jose@example.com"`
+</ParamField>
+
+### Headers
+
+```http
+Content-Type: application/json
+Accept: application/json
+```
+
+## Response
+
+<ResponseField name="reservationId" type="string">
+  Unique identifier for the created reservation (UUID format)
+</ResponseField>
+
+<ResponseField name="seatId" type="string">
+  UUID of the reserved seat
+</ResponseField>
+
+<ResponseField name="customerId" type="string">
+  Customer identifier who made the reservation
+</ResponseField>
+
+<ResponseField name="expiresAt" type="string">
+  ISO 8601 timestamp when the reservation expires (15 minutes from creation)
+  
+  Example: `"2026-02-24T16:15:00Z"`
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current status of the reservation
+  
+  Possible values:
+  - `"active"` - Reservation is valid and active
+  - `"expired"` - Reservation has expired (after 15 minutes)
+  - `"consumed"` - Reservation was used to create an order
+</ResponseField>
+
+## Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:50002/reservations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "seatId": "550e8400-e29b-41d4-a716-446655440002",
+    "customerId": "customer-123"
+  }'
+```
+
+```javascript JavaScript
+async function reserveSeat(seatId, customerId) {
+  const response = await fetch('http://localhost:50002/reservations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ seatId, customerId })
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Reservation failed');
+  }
+  
+  return response.json();
+}
+
+// Usage
+const reservation = await reserveSeat(
+  '550e8400-e29b-41d4-a716-446655440002',
+  'customer-123'
+);
+console.log('Reservation ID:', reservation.reservationId);
+
+// IMPORTANT: Wait 2-3 seconds before adding to cart
+await new Promise(resolve => setTimeout(resolve, 3000));
+```
+
+```python Python
+import requests
+import time
+
+def reserve_seat(seat_id, customer_id):
+    """Create a seat reservation"""
+    url = "http://localhost:50002/reservations"
+    payload = {
+        "seatId": seat_id,
+        "customerId": customer_id
+    }
+    
+    response = requests.post(url, json=payload)
+    response.raise_for_status()
+    return response.json()
+
+# Usage
+reservation = reserve_seat(
+    "550e8400-e29b-41d4-a716-446655440002",
+    "customer-123"
+)
+print(f"Reservation ID: {reservation['reservationId']}")
+print(f"Expires at: {reservation['expiresAt']}")
+
+# IMPORTANT: Wait for Kafka event processing
+print("Waiting for event processing...")
+time.sleep(3)
+```
+</CodeGroup>
+
+## Example Response
+
+<ResponseExample>
+```json 200 OK
+{
+  "reservationId": "8bf7fffc-9ff5-401c-9d2d-86f525f42e40",
+  "seatId": "550e8400-e29b-41d4-a716-446655440002",
+  "customerId": "customer-123",
+  "expiresAt": "2026-02-24T16:15:00Z",
+  "status": "active"
+}
+```
+
+```json 400 Bad Request - Invalid seatId
+{
+  "error": "SeatId must not be empty"
+}
+```
+
+```json 400 Bad Request - Invalid customerId
+{
+  "error": "CustomerId must not be empty"
+}
+```
+
+```json 404 Not Found - Seat doesn't exist
+{
+  "error": "Seat 550e8400-e29b-41d4-a716-446655440002 not found"
+}
+```
+
+```json 409 Conflict - Seat already reserved
+{
+  "error": "Seat 550e8400-e29b-41d4-a716-446655440002 is already reserved"
+}
+```
+
+```json 409 Conflict - Lock acquisition failed
+{
+  "error": "Could not acquire lock for seat 550e8400-e29b-41d4-a716-446655440002. Seat may be reserved or locked."
+}
+```
+</ResponseExample>
+
+## Error Responses
+
+### 400 Bad Request
+
+Returned when request parameters are invalid:
+
+- Empty or invalid `seatId` format
+- Empty or missing `customerId`
+
+### 404 Not Found
+
+Returned when the specified seat does not exist in the database. This can happen if:
+
+- The `seatId` is a valid UUID but doesn't correspond to any seat
+- The seat was deleted from the system
+
+### 409 Conflict
+
+Returned when the seat cannot be reserved due to conflicts:
+
+- **Seat already reserved**: Another customer has already reserved this seat and the reservation hasn't expired
+- **Lock acquisition failed**: The Redis distributed lock couldn't be acquired within the timeout (5 seconds), indicating high contention or another process holding the lock
+
+<Note>
+  The 409 Conflict response for lock acquisition failure is rare but can occur during very high concurrent load. The client should retry after a brief delay.
+</Note>
+
+### 500 Internal Server Error
+
+Returned for unexpected server errors such as:
+
+- Database connection failures
+- Redis unavailability
+- Kafka publishing errors
+
+## Workflow Integration
+
+The complete reservation-to-purchase flow requires these steps:
+
+<Steps>
+  <Step title="Get Event Seatmap">
+    Call `GET /events/{eventId}/seatmap` (Catalog service) to retrieve available seats
+  </Step>
+  
+  <Step title="Create Reservation">
+    Call `POST /reservations` (this endpoint) to reserve the selected seat
+  </Step>
+  
+  <Step title="Wait for Event Processing">
+    **Critical**: Wait 2-3 seconds for the Kafka `reservation-created` event to be consumed by the Ordering service
+  </Step>
+  
+  <Step title="Add to Cart">
+    Call `POST /cart/add` (Ordering service) with the `reservationId` from step 2
+  </Step>
+  
+  <Step title="Complete Purchase">
+    Call `POST /orders/checkout` (Ordering service) to finalize the purchase
+  </Step>
+</Steps>
+
+<Warning>
+  **Expiration Notice**: Reservations automatically expire after 15 minutes. If the customer doesn't add the seat to their cart and complete checkout within this timeframe, the reservation will be released and the seat becomes available again.
+</Warning>
+
+## Technical Architecture
+
+### Source Code References
+
+- **Endpoint**: `Inventory.Api/Endpoints/ReservationEndpoints.cs:17-56`
+- **Command Handler**: `Inventory.Application/UseCases/CreateReservation/CreateReservationCommandHandler.cs`
+- **Domain Model**: `Inventory.Domain/Entities/Reservation.cs`
+- **Redis Lock**: `Inventory.Infrastructure/Locking/RedisLock.cs`
+
+### Database Schema
+
+The reservation is stored in PostgreSQL with the following structure:
+
+```sql
+CREATE TABLE Reservations (
+    Id UUID PRIMARY KEY,
+    SeatId UUID NOT NULL,
+    CustomerId VARCHAR NOT NULL,
+    CreatedAt TIMESTAMP NOT NULL,
+    ExpiresAt TIMESTAMP NOT NULL,
+    Status VARCHAR NOT NULL
+);
+```
+
+### Concurrency Strategy
+
+The implementation uses a multi-layered approach to prevent double-booking:
+
+1. **Distributed Lock (Redis)**: Prevents concurrent reservation attempts across service instances
+2. **Database Check**: Validates seat availability after acquiring the lock
+3. **Atomic Update**: Marks seat as reserved in the same transaction as creating the reservation
+
+This approach balances consistency with performance, reducing database load while maintaining data integrity.

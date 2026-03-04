@@ -1,0 +1,364 @@
+---
+title: Notification Service
+description: Notification service for email and SMS delivery
+---
+
+## Overview
+
+The Notification service handles delivery of transactional notifications, primarily email delivery of ticket PDFs after ticket generation. It consumes Kafka events, composes email messages, sends them via SMTP, and tracks delivery status.
+
+**Port:** 50005 (external), 5005 (internal)  
+**Database Schema:** `bc_notification`  
+**Dependencies:** PostgreSQL, Kafka, SMTP server (or dev mode simulation)
+
+## Responsibilities
+
+- Send email notifications to customers
+- Deliver ticket PDFs via email after fulfillment
+- Track notification status (pending, sent, failed, retrying)
+- Provide idempotent notification handling
+- Store email templates and delivery history
+- Support SMTP integration with development mode fallback
+
+## API Endpoints
+
+The Notification service does not expose public HTTP endpoints. It operates as an event-driven consumer service listening to Kafka topics.
+
+## Domain Models
+
+### EmailNotification
+
+Represents an email notification record.
+
+<ResponseField name="Id" type="Guid">
+  Unique notification identifier
+</ResponseField>
+
+<ResponseField name="TicketId" type="Guid">
+  Reference to the ticket being delivered
+</ResponseField>
+
+<ResponseField name="OrderId" type="Guid">
+  Reference to the order
+</ResponseField>
+
+<ResponseField name="RecipientEmail" type="string">
+  Email address of the recipient
+</ResponseField>
+
+<ResponseField name="Subject" type="string">
+  Email subject line
+</ResponseField>
+
+<ResponseField name="Body" type="string">
+  Email body content (plain text or HTML)
+</ResponseField>
+
+<ResponseField name="Status" type="NotificationStatus">
+  Notification status: `Pending`, `Sent`, `Failed`, or `Retrying`
+</ResponseField>
+
+<ResponseField name="TicketPdfUrl" type="string?">
+  URL or path to the ticket PDF attachment
+</ResponseField>
+
+<ResponseField name="FailureReason" type="string?">
+  Reason for delivery failure (if applicable)
+</ResponseField>
+
+<ResponseField name="CreatedAt" type="DateTime">
+  When the notification was created
+</ResponseField>
+
+<ResponseField name="SentAt" type="DateTime?">
+  When the notification was successfully sent
+</ResponseField>
+
+<ResponseField name="UpdatedAt" type="DateTime">
+  When the notification was last updated
+</ResponseField>
+
+```csharp title="~/workspace/source/services/notification/src/Domain/Entities/EmailNotification.cs"
+public class EmailNotification
+{
+    public Guid Id { get; set; }
+    public Guid TicketId { get; set; }
+    public Guid OrderId { get; set; }
+    public string RecipientEmail { get; set; } = string.Empty;
+    public string Subject { get; set; } = string.Empty;
+    public string Body { get; set; } = string.Empty;
+    public NotificationStatus Status { get; set; }
+    public string? TicketPdfUrl { get; set; }
+    public string? FailureReason { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? SentAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+public enum NotificationStatus
+{
+    Pending = 0,
+    Sent = 1,
+    Failed = 2,
+    Retrying = 3
+}
+```
+
+## Configuration
+
+### Database Connection
+
+```json title="appsettings.json"
+{
+  "ConnectionStrings": {
+    "Default": "Host=postgres;Port=5432;Database=speckit;Username=postgres;Password=postgres;SearchPath=bc_notification"
+  }
+}
+```
+
+### Kafka Configuration
+
+```json
+{
+  "Kafka": {
+    "BootstrapServers": "kafka:9092",
+    "ConsumerGroupId": "notification-service",
+    "Topics": {
+      "TicketIssued": "ticket-issued"
+    }
+  }
+}
+```
+
+### Email (SMTP) Configuration
+
+```json
+{
+  "Email": {
+    "Smtp": {
+      "Host": "localhost",
+      "Port": 587,
+      "Username": "",
+      "Password": "",
+      "FromAddress": "noreply@ticketing.local",
+      "FromName": "Ticketing Platform",
+      "EnableSsl": true,
+      "UseDevMode": true
+    }
+  }
+}
+```
+
+**Development Mode:**
+- `UseDevMode: true` simulates email sending without actual SMTP connection
+- Logs email content to console/logs instead of sending
+- Useful for local development and testing
+
+**Production Mode:**
+- Set `UseDevMode: false`
+- Configure real SMTP credentials (Gmail, SendGrid, AWS SES, etc.)
+
+## Notification Flow
+
+1. **Consume ticket-issued event**: Kafka consumer receives event from Fulfillment service
+2. **Check idempotency**: Verify notification doesn't already exist for this OrderId
+3. **Build email content**: Compose subject and body with event/ticket details
+4. **Send email**: Deliver via SMTP (or simulate in dev mode)
+5. **Create notification record**: Store in database with appropriate status
+6. **Update status**: Mark as `Sent` or `Failed` based on delivery result
+7. **Log result**: Record success or failure for monitoring/debugging
+
+## Use Cases
+
+### SendTicketNotification
+
+The primary use case for sending ticket delivery emails.
+
+<ParamField body="TicketId" type="Guid" required>
+  The ticket ID
+</ParamField>
+
+<ParamField body="OrderId" type="Guid" required>
+  The order ID
+</ParamField>
+
+<ParamField body="RecipientEmail" type="string" required>
+  Customer email address
+</ParamField>
+
+<ParamField body="EventName" type="string" required>
+  Name of the event
+</ParamField>
+
+<ParamField body="SeatNumber" type="string" required>
+  Seat information
+</ParamField>
+
+<ParamField body="Price" type="decimal" required>
+  Ticket price
+</ParamField>
+
+<ParamField body="Currency" type="string" default="USD">
+  Currency code
+</ParamField>
+
+<ParamField body="TicketPdfUrl" type="string">
+  URL to download the ticket PDF
+</ParamField>
+
+<ParamField body="QrCodeData" type="string">
+  QR code data for the ticket
+</ParamField>
+
+```csharp title="~/workspace/source/services/notification/src/Application/UseCases/SendTicketNotification/SendTicketNotificationHandler.cs"
+public async Task<SendTicketNotificationResponse> Handle(SendTicketNotificationCommand request, CancellationToken cancellationToken)
+{
+    // Check if notification already exists (idempotency)
+    var existingNotification = await _repository.GetByOrderIdAsync(request.OrderId);
+    if (existingNotification != null)
+    {
+        return new SendTicketNotificationResponse
+        {
+            NotificationId = existingNotification.Id,
+            Success = true,
+            Message = "Notification already sent"
+        };
+    }
+
+    // Build email content
+    var subject = $"Your Ticket for {request.EventName}";
+    var body = BuildEmailBody(request);
+
+    // Send email
+    var emailSent = await _emailService.SendAsync(
+        request.RecipientEmail,
+        subject,
+        body,
+        request.TicketPdfUrl);
+
+    // Create and persist notification record
+    var notification = new EmailNotification
+    {
+        Id = Guid.NewGuid(),
+        TicketId = request.TicketId,
+        OrderId = request.OrderId,
+        RecipientEmail = request.RecipientEmail,
+        Subject = subject,
+        Body = body,
+        TicketPdfUrl = request.TicketPdfUrl,
+        Status = emailSent ? NotificationStatus.Sent : NotificationStatus.Failed,
+        CreatedAt = DateTime.UtcNow,
+        SentAt = emailSent ? DateTime.UtcNow : null,
+        UpdatedAt = DateTime.UtcNow,
+        FailureReason = emailSent ? null : "Email service failed"
+    };
+
+    await _repository.AddAsync(notification);
+    await _repository.SaveChangesAsync();
+
+    return new SendTicketNotificationResponse
+    {
+        NotificationId = notification.Id,
+        Success = true,
+        Message = emailSent ? "Notification sent successfully" : "Notification queued (email send failed)"
+    };
+}
+```
+
+## Email Template
+
+The default email template includes:
+
+- Greeting
+- Event details (name, seat, price)
+- Ticket issuance timestamp
+- Instructions for using the ticket
+- QR code mention
+- PDF attachment reference
+- Support contact information
+
+```csharp
+private string BuildEmailBody(SendTicketNotificationCommand request)
+{
+    return $@"
+Dear Customer,
+
+Thank you for your purchase! Your ticket has been successfully issued.
+
+Event Details:
+- Event: {request.EventName}
+- Seat: {request.SeatNumber}
+- Price: {request.Price} {request.Currency}
+- Issued At: {request.TicketIssuedAt:g}
+
+Your ticket PDF is attached to this email. Please download it and bring it to the venue.
+You can also scan the QR code on your ticket for quick entry.
+
+If you have any questions, please contact our support team.
+
+Best regards,
+Ticketing Platform
+";
+}
+```
+
+## Kafka Integration
+
+**Consumed Events:**
+
+- **ticket-issued**: Triggers email notification flow
+  - Payload: `{ TicketId, OrderId, CustomerEmail, EventName, SeatNumber, Price, Currency, TicketPdfUrl, QrCodeData, TicketIssuedAt }`
+
+## Idempotency
+
+To prevent duplicate email sends:
+
+1. Check for existing notification by `OrderId`
+2. If found, return success without re-sending
+3. If not found, proceed with email send and record creation
+
+This ensures that re-processing the same Kafka event won't spam customers.
+
+## Retry Strategy
+
+For failed notifications:
+
+1. Status set to `Failed` with `FailureReason`
+2. Background worker can retry failed notifications
+3. Status transitions: `Pending` → `Retrying` → `Sent` or `Failed`
+4. Exponential backoff recommended for retries
+
+## Architecture Notes
+
+- Uses **MediatR** for CQRS-style command/query handling
+- Infrastructure services registered via `AddInfrastructure()` extension method
+- Event-driven architecture (no HTTP controllers)
+- Listens to Kafka for `ticket-issued` events
+- SMTP service abstracted via `IEmailService` port
+- Development mode simulation for local testing without SMTP server
+
+## Ports (Interfaces)
+
+### IEmailService
+
+Abstraction for email sending.
+
+```csharp
+public interface IEmailService
+{
+    Task<bool> SendAsync(string to, string subject, string body, string? attachmentUrl);
+}
+```
+
+### IEmailNotificationRepository
+
+Repository for email notification persistence.
+
+```csharp
+public interface IEmailNotificationRepository
+{
+    Task<EmailNotification?> GetByOrderIdAsync(Guid orderId);
+    Task AddAsync(EmailNotification notification);
+    Task SaveChangesAsync();
+}
+```

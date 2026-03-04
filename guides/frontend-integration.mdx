@@ -1,0 +1,506 @@
+---
+title: "Frontend Integration Guide"
+description: "Complete guide to integrating your frontend with the SpecKit Ticketing Platform APIs"
+---
+
+## Overview
+
+This guide provides everything you need to integrate a frontend application with the SpecKit Ticketing Platform. It covers the complete purchase workflow from browsing events to completing checkout.
+
+## Service Endpoints
+
+All services are exposed via REST APIs:
+
+| Service | Base URL | Purpose |
+|---------|----------|---------|
+| **Identity** | `http://localhost:50000` | Authentication and authorization |
+| **Catalog** | `http://localhost:50001` | Events, seats, seatmaps |
+| **Inventory** | `http://localhost:50002` | Seat reservations |
+| **Ordering** | `http://localhost:5003` | Shopping cart and orders |
+| **Payment** | `http://localhost:5004` | Payment processing |
+
+## Complete Purchase Flow
+
+<Steps>
+  <Step title="Fetch event and seatmap">
+    Retrieve event details and available seats:
+
+    ```typescript
+    async function getEventSeatmap(eventId: string) {
+      const response = await fetch(
+        `http://localhost:50001/events/${eventId}/seatmap`
+      );
+      return response.json();
+    }
+    ```
+
+    **Response**:
+    ```json
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "name": "Coldplay - Live in Santiago",
+      "eventDate": "2026-03-15T19:00:00Z",
+      "basePrice": 50.00,
+      "seats": [
+        {
+          "id": "550e8400-e29b-41d4-a716-446655440002",
+          "sectionCode": "A",
+          "rowNumber": 1,
+          "seatNumber": 2,
+          "price": 50.00,
+          "status": "available"
+        }
+      ]
+    }
+    ```
+  </Step>
+
+  <Step title="Reserve a seat">
+    Create a 15-minute reservation:
+
+    ```typescript
+    async function reserveSeat(seatId: string, customerId: string) {
+      const response = await fetch('http://localhost:50002/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seatId, customerId })
+      });
+      return response.json();
+    }
+    ```
+
+    **Response**:
+    ```json
+    {
+      "reservationId": "8bf7fffc-9ff5-401c-9d2d-86f525f42e40",
+      "seatId": "550e8400-e29b-41d4-a716-446655440002",
+      "customerId": "customer-123",
+      "expiresAt": "2026-02-24T16:15:00Z",
+      "status": "active"
+    }
+    ```
+
+    <Warning>
+      The reservation is held in Redis with a 15-minute TTL. A `reservation-created` event is published to Kafka. **Wait 2-3 seconds** before proceeding to allow the Ordering service to consume this event.
+    </Warning>
+  </Step>
+
+  <Step title="Wait for Kafka event propagation">
+    ```typescript
+    // Wait for the reservation-created event to be consumed
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    ```
+
+    This delay is critical because the Ordering service must receive the reservation event from Kafka before you can add the seat to the cart.
+  </Step>
+
+  <Step title="Add seat to cart">
+    ```typescript
+    async function addToCart(
+      reservationId: string,
+      seatId: string,
+      price: number,
+      userId: string
+    ) {
+      const response = await fetch('http://localhost:5003/cart/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reservationId,
+          seatId,
+          price,
+          userId
+        })
+      });
+      return response.json();
+    }
+    ```
+
+    **Response**:
+    ```json
+    {
+      "id": "order-uuid-001",
+      "userId": "user-123",
+      "totalAmount": 50.00,
+      "state": "draft",
+      "createdAt": "2026-02-24T15:15:00Z",
+      "items": [
+        {
+          "id": "item-001",
+          "seatId": "550e8400-e29b-41d4-a716-446655440002",
+          "price": 50.00
+        }
+      ]
+    }
+    ```
+
+    <Note>
+      You can add multiple seats to the same cart by calling this endpoint multiple times with the same `userId`. The system will automatically find the existing draft order.
+    </Note>
+  </Step>
+
+  <Step title="Complete checkout">
+    Finalize the order and trigger payment:
+
+    ```typescript
+    async function checkout(orderId: string, userId: string) {
+      const response = await fetch('http://localhost:5003/orders/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId, userId })
+      });
+      return response.json();
+    }
+    ```
+
+    **Response**:
+    ```json
+    {
+      "id": "order-uuid-001",
+      "userId": "user-123",
+      "totalAmount": 50.00,
+      "state": "pending",
+      "paidAt": "2026-02-24T15:16:30Z",
+      "items": [...]
+    }
+    ```
+
+    The order transitions from `draft` → `pending` → `completed` as payment is processed asynchronously.
+  </Step>
+</Steps>
+
+## Authentication
+
+### User Authentication
+
+For authenticated users, include the `userId` in cart and checkout requests:
+
+```typescript
+const order = await addToCart(reservationId, seatId, price, "user-123");
+```
+
+### Guest Checkout
+
+For anonymous users, use a `guestToken`:
+
+```typescript
+const guestToken = `guest-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
+const order = await fetch('http://localhost:5003/cart/add', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    reservationId,
+    seatId,
+    price,
+    guestToken  // Use guestToken instead of userId
+  })
+});
+```
+
+<Warning>
+  You must provide **either** `userId` **or** `guestToken` — never both. The same identifier must be used across all cart operations and checkout.
+</Warning>
+
+## Error Handling
+
+### Common Errors
+
+<Accordion title="400 Bad Request - Invalid parameters">
+  ```json
+  {
+    "error": "Invalid seatId format",
+    "details": "seatId must be a valid UUID"
+  }
+  ```
+
+  **Solution**: Validate all UUIDs before sending requests.
+</Accordion>
+
+<Accordion title="404 Not Found - Reservation not found">
+  ```json
+  {
+    "error": "Reservation not found"
+  }
+  ```
+
+  **Cause**: The Kafka event hasn't been consumed yet by the Ordering service.
+
+  **Solution**: Ensure you wait 2-3 seconds after creating the reservation.
+</Accordion>
+
+<Accordion title="409 Conflict - Seat already reserved">
+  ```json
+  {
+    "error": "Seat is already reserved"
+  }
+  ```
+
+  **Cause**: Another user has an active reservation for this seat.
+
+  **Solution**: Refresh the seatmap and select a different seat.
+</Accordion>
+
+<Accordion title="400 Bad Request - Reservation expired">
+  ```json
+  {
+    "error": "Reservation has expired"
+  }
+  ```
+
+  **Cause**: More than 15 minutes passed since the reservation was created.
+
+  **Solution**: Create a new reservation for the seat.
+</Accordion>
+
+## Data Models
+
+### TypeScript Interfaces
+
+```typescript
+interface Event {
+  id: string;
+  name: string;
+  description: string;
+  eventDate: string;  // ISO 8601 date-time
+  basePrice: number;
+  seats: Seat[];
+}
+
+interface Seat {
+  id: string;
+  sectionCode: string;
+  rowNumber: number;
+  seatNumber: number;
+  price: number;
+  status: "available" | "reserved" | "sold";
+}
+
+interface Reservation {
+  reservationId: string;
+  seatId: string;
+  customerId: string;
+  expiresAt: string;  // ISO 8601 date-time
+  status: "active" | "expired" | "consumed";
+}
+
+interface Order {
+  id: string;
+  userId?: string;
+  guestToken?: string;
+  totalAmount: number;
+  state: "draft" | "pending" | "completed" | "cancelled";
+  createdAt: string;
+  paidAt?: string;
+  items: OrderItem[];
+}
+
+interface OrderItem {
+  id: string;
+  seatId: string;
+  price: number;
+}
+```
+
+## React Example
+
+Complete React component for seat selection and purchase:
+
+```typescript
+import { useState } from 'react';
+
+export function SeatPurchase({ eventId, userId }: { eventId: string; userId: string }) {
+  const [event, setEvent] = useState<Event | null>(null);
+  const [selectedSeatId, setSelectedSeatId] = useState<string | null>(null);
+  const [orderId, setOrderId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Step 1: Load event and seatmap
+  const loadEvent = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch(`http://localhost:50001/events/${eventId}/seatmap`);
+      const data = await response.json();
+      setEvent(data);
+    } catch (err) {
+      setError('Failed to load event');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Step 2-4: Reserve seat, wait, and add to cart
+  const purchaseSeat = async (seatId: string) => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Create reservation
+      const reservationRes = await fetch('http://localhost:50002/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seatId, customerId: userId })
+      });
+
+      if (!reservationRes.ok) {
+        throw new Error('Reservation failed');
+      }
+
+      const reservation = await reservationRes.json();
+
+      // Wait for Kafka event
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // Add to cart
+      const seat = event?.seats.find(s => s.id === seatId);
+      const cartRes = await fetch('http://localhost:5003/cart/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reservationId: reservation.reservationId,
+          seatId,
+          price: seat?.price,
+          userId
+        })
+      });
+
+      if (!cartRes.ok) {
+        throw new Error('Failed to add to cart');
+      }
+
+      const order = await cartRes.json();
+      setOrderId(order.id);
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Purchase failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Step 5: Checkout
+  const checkout = async () => {
+    if (!orderId) return;
+
+    setLoading(true);
+    try {
+      const response = await fetch('http://localhost:5003/orders/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId, userId })
+      });
+
+      if (!response.ok) {
+        throw new Error('Checkout failed');
+      }
+
+      const finalOrder = await response.json();
+      alert(`Purchase complete! Order ID: ${finalOrder.id}`);
+
+    } catch (err) {
+      setError('Checkout failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div>
+      {!event && <button onClick={loadEvent}>Load Event</button>}
+
+      {event && (
+        <div>
+          <h2>{event.name}</h2>
+          <div className="seats">
+            {event.seats.map(seat => (
+              <button
+                key={seat.id}
+                disabled={seat.status !== 'available' || loading}
+                onClick={() => purchaseSeat(seat.id)}
+              >
+                {seat.sectionCode}-{seat.rowNumber}-{seat.seatNumber} (${seat.price})
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {orderId && <button onClick={checkout}>Complete Purchase</button>}
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+```
+
+## Testing Your Integration
+
+Use this bash script to test the complete flow:
+
+```bash
+#!/bin/bash
+
+EVENT_ID="550e8400-e29b-41d4-a716-446655440000"
+USER_ID="test-user-$(date +%s)"
+
+echo "1. Fetching event seatmap..."
+EVENT=$(curl -s http://localhost:50001/events/$EVENT_ID/seatmap)
+SEAT_ID=$(echo $EVENT | jq -r '.seats[0].id')
+PRICE=$(echo $EVENT | jq -r '.seats[0].price')
+echo "✓ Seat ID: $SEAT_ID, Price: $PRICE"
+
+echo "2. Creating reservation..."
+RESERVATION=$(curl -s -X POST http://localhost:50002/reservations \
+  -H "Content-Type: application/json" \
+  -d "{\"seatId\":\"$SEAT_ID\",\"customerId\":\"$USER_ID\"}")
+RESERVATION_ID=$(echo $RESERVATION | jq -r '.reservationId')
+echo "✓ Reservation ID: $RESERVATION_ID"
+
+echo "3. Waiting for Kafka event (3 seconds)..."
+sleep 3
+
+echo "4. Adding to cart..."
+ORDER=$(curl -s -X POST http://localhost:5003/cart/add \
+  -H "Content-Type: application/json" \
+  -d "{\"reservationId\":\"$RESERVATION_ID\",\"seatId\":\"$SEAT_ID\",\"price\":$PRICE,\"userId\":\"$USER_ID\"}")
+ORDER_ID=$(echo $ORDER | jq -r '.id')
+echo "✓ Order ID: $ORDER_ID"
+
+echo "5. Checking out..."
+FINAL=$(curl -s -X POST http://localhost:5003/orders/checkout \
+  -H "Content-Type: application/json" \
+  -d "{\"orderId\":\"$ORDER_ID\",\"userId\":\"$USER_ID\"}")
+STATE=$(echo $FINAL | jq -r '.state')
+echo "✓ Order state: $STATE"
+
+echo "✅ Purchase flow complete!"
+```
+
+## CORS Configuration
+
+For local development, the backend services include CORS support for `http://localhost:3000`:
+
+```csharp
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("FrontendPolicy", policy =>
+    {
+        policy.WithOrigins("http://localhost:3000")
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
+```
+
+For production, update the allowed origins in each service's `Program.cs`.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api/catalog/get-events">
+    Explore detailed API documentation for all endpoints
+  </Card>
+  <Card title="Kafka Events" icon="message" href="/guides/kafka-events">
+    Understand event-driven workflows and Kafka integration
+  </Card>
+</CardGroup>

@@ -1,0 +1,294 @@
+---
+title: "Get Event Seatmap"
+api: "GET http://localhost:50001/events/{id}/seatmap"
+description: "Retrieve a specific event with its complete seatmap and seat availability"
+---
+
+## Overview
+
+This endpoint returns detailed information about a specific event along with its complete seatmap, including all seats with their availability status, pricing, and location details. This is the primary endpoint for displaying seat selection interfaces to users.
+
+Use this endpoint when you need to:
+- Display an interactive seat map to users
+- Show real-time seat availability
+- Allow users to select seats for purchase
+
+## Authentication
+
+No authentication required. This is a public endpoint.
+
+## Path Parameters
+
+<ParamField path="id" type="string" required>
+  The unique identifier (UUID) of the event to retrieve with seatmap.
+  
+  Example: `550e8400-e29b-41d4-a716-446655440000`
+</ParamField>
+
+## Response
+
+<ResponseField name="eventId" type="string" required>
+  Unique identifier for the event (UUID format)
+</ResponseField>
+
+<ResponseField name="eventName" type="string" required>
+  Name of the event
+</ResponseField>
+
+<ResponseField name="eventDescription" type="string" required>
+  Detailed description of the event
+</ResponseField>
+
+<ResponseField name="eventDate" type="string" required>
+  Date and time of the event (ISO 8601 format in UTC)
+</ResponseField>
+
+<ResponseField name="basePrice" type="number" required>
+  Base price for tickets to this event
+</ResponseField>
+
+<ResponseField name="seats" type="array" required>
+  Array of all seats for this event
+  
+  <Expandable title="SeatDto">
+    <ResponseField name="id" type="string" required>
+      Unique identifier for the seat (UUID format)
+    </ResponseField>
+    
+    <ResponseField name="sectionCode" type="string" required>
+      Section identifier (e.g., "A", "B", "VIP")
+    </ResponseField>
+    
+    <ResponseField name="rowNumber" type="integer" required>
+      Row number within the section (starts at 1)
+    </ResponseField>
+    
+    <ResponseField name="seatNumber" type="integer" required>
+      Seat number within the row (starts at 1)
+    </ResponseField>
+    
+    <ResponseField name="price" type="number" required>
+      Price for this specific seat
+    </ResponseField>
+    
+    <ResponseField name="status" type="string" required>
+      Current availability status of the seat. Possible values:
+      - `available` - The seat is available for reservation
+      - `reserved` - The seat is temporarily reserved by another user
+      - `sold` - The seat has been purchased and is no longer available
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:50001/events/550e8400-e29b-41d4-a716-446655440000/seatmap \
+  -H "Content-Type: application/json"
+```
+
+```javascript JavaScript
+const eventId = '550e8400-e29b-41d4-a716-446655440000';
+
+const response = await fetch(
+  `http://localhost:50001/events/${eventId}/seatmap`,
+  {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  }
+);
+
+if (response.ok) {
+  const event = await response.json();
+  console.log(`Event: ${event.eventName}`);
+  console.log(`Total seats: ${event.seats.length}`);
+  
+  // Filter available seats
+  const availableSeats = event.seats.filter(s => s.status === 'available');
+  console.log(`Available seats: ${availableSeats.length}`);
+} else if (response.status === 404) {
+  console.error('Event not found');
+}
+```
+
+```python Python
+import requests
+
+event_id = "550e8400-e29b-41d4-a716-446655440000"
+url = f"http://localhost:50001/events/{event_id}/seatmap"
+headers = {"Content-Type": "application/json"}
+
+response = requests.get(url, headers=headers)
+
+if response.status_code == 200:
+    event = response.json()
+    print(f"Event: {event['eventName']}")
+    print(f"Total seats: {len(event['seats'])}")
+    
+    # Filter available seats
+    available_seats = [s for s in event['seats'] if s['status'] == 'available']
+    print(f"Available seats: {len(available_seats)}")
+elif response.status_code == 404:
+    print("Event not found")
+```
+
+```csharp C#
+using System.Net.Http;
+using System.Text.Json;
+
+var eventId = Guid.Parse("550e8400-e29b-41d4-a716-446655440000");
+var client = new HttpClient();
+var response = await client.GetAsync(
+    $"http://localhost:50001/events/{eventId}/seatmap"
+);
+
+if (response.IsSuccessStatusCode)
+{
+    var content = await response.Content.ReadAsStringAsync();
+    var eventData = JsonSerializer.Deserialize<GetEventSeatmapResponse>(content);
+    
+    Console.WriteLine($"Event: {eventData.EventName}");
+    Console.WriteLine($"Total seats: {eventData.Seats.Count()}");
+    
+    var availableSeats = eventData.Seats.Where(s => s.Status == "available");
+    Console.WriteLine($"Available seats: {availableSeats.Count()}");
+}
+else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+{
+    Console.WriteLine("Event not found");
+}
+```
+</CodeGroup>
+
+## Example Response
+
+```json 200 OK
+{
+  "eventId": "550e8400-e29b-41d4-a716-446655440000",
+  "eventName": "Coldplay - Live in Santiago",
+  "eventDescription": "World tour 2026",
+  "eventDate": "2026-03-15T19:00:00Z",
+  "basePrice": 50.00,
+  "seats": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001",
+      "sectionCode": "A",
+      "rowNumber": 1,
+      "seatNumber": 1,
+      "price": 50.00,
+      "status": "available"
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440002",
+      "sectionCode": "A",
+      "rowNumber": 1,
+      "seatNumber": 2,
+      "price": 50.00,
+      "status": "available"
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440003",
+      "sectionCode": "A",
+      "rowNumber": 1,
+      "seatNumber": 3,
+      "price": 50.00,
+      "status": "reserved"
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440004",
+      "sectionCode": "VIP",
+      "rowNumber": 1,
+      "seatNumber": 1,
+      "price": 150.00,
+      "status": "sold"
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440005",
+      "sectionCode": "VIP",
+      "rowNumber": 1,
+      "seatNumber": 2,
+      "price": 150.00,
+      "status": "available"
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440006",
+      "sectionCode": "B",
+      "rowNumber": 5,
+      "seatNumber": 10,
+      "price": 35.00,
+      "status": "available"
+    }
+  ]
+}
+```
+
+## Error Responses
+
+<Accordion title="404 Not Found">
+  The event with the specified ID does not exist in the system.
+  
+  The endpoint returns HTTP 404 with no response body when the event is not found.
+</Accordion>
+
+<Accordion title="400 Bad Request">
+  The provided event ID is not in a valid UUID format.
+  
+  ```json
+  {
+    "error": "Invalid event ID format",
+    "message": "The event ID must be a valid UUID"
+  }
+  ```
+</Accordion>
+
+<Accordion title="500 Internal Server Error">
+  Server encountered an unexpected error while processing the request.
+  
+  ```json
+  {
+    "error": "Internal server error",
+    "message": "An unexpected error occurred while fetching the event seatmap"
+  }
+  ```
+</Accordion>
+
+## Seat Status Reference
+
+| Status | Description | User Action |
+|--------|-------------|-------------|
+| `available` | Seat is available for reservation | User can select and reserve this seat |
+| `reserved` | Seat is temporarily reserved by another user | Seat cannot be selected (reservation expires in 30 minutes) |
+| `sold` | Seat has been purchased | Seat is no longer available |
+
+## Integration Flow
+
+This endpoint is typically used as the first step in the ticket purchase flow:
+
+1. **GET /events/{id}/seatmap** - Display available seats to the user
+2. User selects an available seat
+3. **POST /reservations** (Inventory service) - Reserve the selected seat
+4. Wait 2-3 seconds for reservation event to propagate via Kafka
+5. **POST /cart/add** (Ordering service) - Add reserved seat to cart
+6. **POST /orders/checkout** (Ordering service) - Complete the purchase
+
+See the [Frontend Integration Guide](/guides/frontend-integration) for a complete end-to-end example.
+
+## Notes
+
+- All prices are in USD
+- Event dates are returned in UTC timezone (ISO 8601 format)
+- Seat status is updated in real-time based on reservations and purchases
+- Reserved seats automatically expire after 30 minutes if not added to cart
+- The `id` parameter must be a valid UUID (GUID) format
+- Seats are ordered by section, row, and seat number in the response
+- Individual seat prices may differ from the base price depending on section (e.g., VIP seats)
+
+## Performance Considerations
+
+- This endpoint may return large payloads for events with many seats
+- Consider implementing pagination or filtering on the client side for large venues
+- The response is cacheable for short periods (e.g., 5-10 seconds) to reduce server load
+- Seat status should be refreshed periodically to show real-time availability

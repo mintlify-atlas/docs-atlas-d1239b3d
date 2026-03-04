@@ -1,0 +1,275 @@
+---
+title: Inventory Service
+description: Inventory service managing seat reservations with Redis locks and TTL-based expiration
+---
+
+## Overview
+
+The Inventory service manages seat reservations with time-limited holds (15-minute TTL). It uses Redis for distributed locking to prevent race conditions and ensures seat availability is managed consistently across the platform.
+
+**Port:** 50002 (external), 5002 (internal)  
+**Database Schema:** `bc_inventory`  
+**Dependencies:** PostgreSQL, Redis, Kafka
+
+## Responsibilities
+
+- Create temporary seat reservations (15-minute TTL)
+- Implement distributed locking via Redis to prevent double-booking
+- Track reservation status (active, expired, confirmed)
+- Publish `reservation-created` events to Kafka
+- Handle optimistic concurrency control with row versioning
+- Expire reservations automatically via background workers
+
+## API Endpoints
+
+Endpoints are defined using minimal API style in `ReservationEndpoints`.
+
+### Create Reservation
+
+<ParamField path="POST /reservations" type="endpoint">
+  Creates a new seat reservation with a 15-minute TTL. Returns 409 if the seat is already reserved.
+</ParamField>
+
+**Request Body:**
+
+<ParamField body="SeatId" type="Guid" required>
+  The ID of the seat to reserve
+</ParamField>
+
+<ParamField body="CustomerId" type="string" required>
+  The ID of the customer making the reservation
+</ParamField>
+
+```csharp title="~/workspace/source/services/inventory/src/Inventory.Api/Endpoints/ReservationEndpoints.cs"
+private static async Task<IResult> CreateReservation(
+    CreateReservationRequest request,
+    IMediator mediator,
+    CancellationToken cancellationToken)
+{
+    if (request.SeatId == Guid.Empty)
+        return Results.BadRequest("SeatId must not be empty");
+
+    if (string.IsNullOrEmpty(request.CustomerId))
+        return Results.BadRequest("CustomerId must not be empty");
+
+    try
+    {
+        var command = new CreateReservationCommand(request.SeatId, request.CustomerId);
+        var response = await mediator.Send(command, cancellationToken);
+        
+        return Results.Created($"/reservations/{response.ReservationId}", response);
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
+```
+
+**Response (201 Created):**
+
+<ResponseField name="ReservationId" type="Guid">
+  The ID of the newly created reservation
+</ResponseField>
+
+<ResponseField name="SeatId" type="Guid">
+  The ID of the reserved seat
+</ResponseField>
+
+<ResponseField name="CustomerId" type="string">
+  The customer who made the reservation
+</ResponseField>
+
+<ResponseField name="ExpiresAt" type="DateTime">
+  When the reservation will expire (typically 15 minutes from creation)
+</ResponseField>
+
+**Error Responses:**
+- **404 Not Found**: Seat not found
+- **409 Conflict**: Seat is already reserved
+- **500 Internal Server Error**: Other failures
+
+## Domain Models
+
+### Reservation
+
+Represents a temporary seat reservation with TTL.
+
+<ResponseField name="Id" type="Guid">
+  Unique reservation identifier
+</ResponseField>
+
+<ResponseField name="SeatId" type="Guid">
+  Reference to the reserved seat
+</ResponseField>
+
+<ResponseField name="CustomerId" type="string">
+  Customer/user who made the reservation
+</ResponseField>
+
+<ResponseField name="CreatedAt" type="DateTime">
+  When the reservation was created
+</ResponseField>
+
+<ResponseField name="ExpiresAt" type="DateTime">
+  When the reservation expires (typically CreatedAt + 15 minutes)
+</ResponseField>
+
+<ResponseField name="Status" type="string">
+  Reservation status: `active`, `expired`, or `confirmed`
+</ResponseField>
+
+```csharp title="~/workspace/source/services/inventory/src/Inventory.Domain/Entities/Reservation.cs"
+public class Reservation
+{
+    public Guid Id { get; set; }
+    public Guid SeatId { get; set; }
+    public string CustomerId { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public DateTime ExpiresAt { get; set; }
+    public string Status { get; set; } = "active";
+}
+```
+
+### Seat
+
+Inventory's internal view of seat availability.
+
+<ResponseField name="Id" type="Guid">
+  Unique seat identifier
+</ResponseField>
+
+<ResponseField name="Section" type="string">
+  Venue section
+</ResponseField>
+
+<ResponseField name="Row" type="string">
+  Row identifier
+</ResponseField>
+
+<ResponseField name="Number" type="int">
+  Seat number
+</ResponseField>
+
+<ResponseField name="Reserved" type="bool">
+  Whether the seat is currently reserved
+</ResponseField>
+
+<ResponseField name="Version" type="byte[]">
+  Row version for optimistic concurrency control
+</ResponseField>
+
+```csharp title="~/workspace/source/services/inventory/src/Inventory.Domain/Entities/Seat.cs"
+public class Seat
+{
+    public Guid Id { get; set; }
+    public string Section { get; set; } = string.Empty;
+    public string Row { get; set; } = string.Empty;
+    public int Number { get; set; }
+    public bool Reserved { get; set; }
+    public byte[]? Version { get; set; }
+}
+```
+
+## Configuration
+
+### Database Connections
+
+```json title="appsettings.json"
+{
+  "ConnectionStrings": {
+    "Default": "Host=postgres;Port=5432;Database=ticketing;Username=postgres;Password=postgres;SearchPath=bc_inventory",
+    "Redis": "redis:6379",
+    "Kafka": "kafka:9092"
+  }
+}
+```
+
+### JWT Authentication
+
+```json
+{
+  "Jwt": {
+    "Key": "dev-secret-key-minimum-32-chars-required-for-security",
+    "Issuer": "SpecKit.Identity",
+    "Audience": "SpecKit.Services"
+  }
+}
+```
+
+## Infrastructure Ports
+
+The Inventory service defines several infrastructure ports for external dependencies:
+
+### IRedisLock
+
+Provides distributed locking via Redis to prevent concurrent reservation attempts on the same seat.
+
+```csharp
+public interface IRedisLock
+{
+    Task<bool> AcquireLockAsync(string key, TimeSpan expiry);
+    Task ReleaseLockAsync(string key);
+}
+```
+
+### IKafkaProducer
+
+Publishes events to Kafka topics.
+
+```csharp
+public interface IKafkaProducer
+{
+    Task PublishAsync<T>(string topic, T message);
+}
+```
+
+**Published Events:**
+- `reservation-created`: When a new reservation is successfully created
+- `reservation-expired`: When a reservation TTL expires (via background worker)
+
+### IDbInitializer
+
+Handles database initialization and migrations on service startup.
+
+```csharp
+public interface IDbInitializer
+{
+    Task InitializeAsync();
+}
+```
+
+## Reservation Flow
+
+1. **Request received**: Client sends `POST /reservations` with `SeatId` and `CustomerId`
+2. **Acquire lock**: Service attempts to acquire a Redis lock on the seat
+3. **Check availability**: Verify seat is not already reserved (using row version)
+4. **Create reservation**: Insert reservation record with 15-minute TTL
+5. **Update seat**: Mark seat as reserved with optimistic concurrency check
+6. **Publish event**: Send `reservation-created` event to Kafka
+7. **Release lock**: Release the Redis lock
+8. **Return response**: Return reservation details with `201 Created`
+
+## Concurrency Control
+
+- **Redis Locks**: Distributed locks prevent simultaneous reservation attempts
+- **Row Versioning**: Optimistic concurrency using `Version` byte array on `Seat` entity
+- **Conflict Handling**: Returns `409 Conflict` if seat is already reserved
+
+## Background Workers
+
+A background worker periodically checks for expired reservations and:
+1. Updates reservation status to `expired`
+2. Releases the seat (marks as available)
+3. Publishes `reservation-expired` event to Kafka
+
+## Architecture Notes
+
+- Uses **MediatR** for CQRS-style command/query handling
+- Uses **Minimal APIs** for endpoint registration
+- Implements **Ports and Adapters** pattern for infrastructure concerns
+- Database initialization runs on service startup via `IDbInitializer`

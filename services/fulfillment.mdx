@@ -1,0 +1,258 @@
+---
+title: Fulfillment Service
+description: Fulfillment service for ticket generation, PDF creation, and delivery
+---
+
+## Overview
+
+The Fulfillment service is responsible for generating tickets after successful payment. It creates ticket records, generates PDF tickets with QR codes, stores them locally, and publishes events to trigger notification delivery.
+
+**Port:** 50004 (external), 5004 (internal)  
+**Database Schema:** `bc_fulfillment`  
+**Dependencies:** PostgreSQL, Kafka, Ordering Service
+
+## Responsibilities
+
+- Generate tickets after successful payment
+- Create PDF tickets with QR codes for venue entry
+- Store ticket PDFs in local file storage
+- Track ticket status (pending, generated, failed, delivered)
+- Publish `ticket-issued` events to Kafka
+- Serve ticket PDFs via HTTP endpoints
+- Enrich ticket data by querying Ordering service
+
+## API Endpoints
+
+### Get Ticket PDF
+
+<ParamField path="GET /tickets/{id}" type="endpoint">
+  Retrieves the PDF file for a specific ticket by ID.
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  The ticket ID (GUID). `.pdf` extension is optional.
+</ParamField>
+
+```csharp title="~/workspace/source/services/fulfillment/src/Api/Controllers/TicketsController.cs"
+[HttpGet("{id}")]
+public async Task<IActionResult> GetTicketPdf(string id)
+{
+    // Strip .pdf extension if present
+    if (id.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+    {
+        id = id.Substring(0, id.Length - 4);
+    }
+
+    if (!Guid.TryParse(id, out var ticketId))
+    {
+        return BadRequest("Invalid ticket ID format. Expected a GUID.");
+    }
+
+    var ticket = await _ticketRepository.GetByIdAsync(ticketId);
+    if (ticket == null)
+        return NotFound("Ticket not found in database");
+
+    var fileName = $"{ticketId}.pdf";
+    var filePath = Path.Combine(_storagePath, fileName);
+
+    if (!System.IO.File.Exists(filePath))
+    {
+        return NotFound("PDF file not found on disk");
+    }
+
+    var bytes = await System.IO.File.ReadAllBytesAsync(filePath);
+    return File(bytes, "application/pdf", fileName);
+}
+```
+
+**Response:** PDF file download
+
+**Error Responses:**
+- **400 Bad Request**: Invalid GUID format
+- **404 Not Found**: Ticket not found in database or PDF file missing
+
+## Domain Models
+
+### Ticket
+
+Represents a generated ticket for an event.
+
+<ResponseField name="Id" type="Guid">
+  Unique ticket identifier
+</ResponseField>
+
+<ResponseField name="OrderId" type="Guid">
+  Reference to the order
+</ResponseField>
+
+<ResponseField name="CustomerEmail" type="string">
+  Customer email address
+</ResponseField>
+
+<ResponseField name="EventName" type="string">
+  Name of the event
+</ResponseField>
+
+<ResponseField name="SeatNumber" type="string">
+  Seat identifier (e.g., "Section A, Row 5, Seat 12")
+</ResponseField>
+
+<ResponseField name="Price" type="decimal">
+  Ticket price
+</ResponseField>
+
+<ResponseField name="Currency" type="string">
+  Currency code (default: "USD")
+</ResponseField>
+
+<ResponseField name="Status" type="TicketStatus">
+  Ticket status enum: `Pending`, `Generated`, `Failed`, or `Delivered`
+</ResponseField>
+
+<ResponseField name="QrCodeData" type="string">
+  QR code data for ticket validation at venue
+</ResponseField>
+
+<ResponseField name="TicketPdfPath" type="string">
+  Local file path to the generated PDF
+</ResponseField>
+
+<ResponseField name="GeneratedAt" type="DateTime">
+  When the ticket was generated
+</ResponseField>
+
+<ResponseField name="CreatedAt" type="DateTime">
+  When the ticket record was created
+</ResponseField>
+
+<ResponseField name="UpdatedAt" type="DateTime">
+  When the ticket was last updated
+</ResponseField>
+
+```csharp title="~/workspace/source/services/fulfillment/src/Domain/Entities/Ticket.cs"
+public class Ticket
+{
+    public Guid Id { get; set; }
+    public Guid OrderId { get; set; }
+    public string CustomerEmail { get; set; } = string.Empty;
+    public string EventName { get; set; } = string.Empty;
+    public string SeatNumber { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public string Currency { get; set; } = "USD";
+    public TicketStatus Status { get; set; }
+    public string QrCodeData { get; set; } = string.Empty;
+    public string TicketPdfPath { get; set; } = string.Empty;
+    public DateTime GeneratedAt { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+public enum TicketStatus
+{
+    Pending = 0,
+    Generated = 1,
+    Failed = 2,
+    Delivered = 3
+}
+```
+
+## Configuration
+
+### Database Connection
+
+```json title="appsettings.json"
+{
+  "ConnectionStrings": {
+    "Default": "Host=postgres;Port=5432;Database=ticketing;Username=postgres;Password=postgres"
+  }
+}
+```
+
+Note: Unlike other services, Fulfillment does not use a dedicated schema in the connection string (it's set elsewhere or uses default).
+
+### Kafka Configuration
+
+```json
+{
+  "Kafka": {
+    "BootstrapServers": "kafka:9092",
+    "ConsumerGroupId": "fulfillment-service",
+    "Topics": {
+      "PaymentSucceeded": "payment-succeeded",
+      "TicketIssued": "ticket-issued"
+    }
+  }
+}
+```
+
+### File Storage
+
+Ticket PDFs are stored locally in:
+
+```
+/app/data/tickets/{ticketId}.pdf
+```
+
+In Docker, this is mounted as a volume (`fulfillment-data`) to persist across container restarts.
+
+## Ticket Generation Flow
+
+1. **Listen for payment-succeeded event**: Kafka consumer receives event from Payment service
+2. **Extract order details**: Parse OrderId from the event payload
+3. **Enrich ticket data**: Query Ordering service for order details (customer, event, seat)
+4. **Generate QR code**: Create QR code data for ticket validation
+5. **Create ticket record**: Insert ticket into database with `Pending` status
+6. **Generate PDF**: Create PDF ticket with event details, seat info, and QR code
+7. **Save PDF**: Store PDF in local file storage (`/app/data/tickets/`)
+8. **Update ticket status**: Mark ticket as `Generated`
+9. **Publish event**: Send `ticket-issued` event to Kafka with ticket details
+10. **Notification triggered**: Notification service consumes event and sends email
+
+## Kafka Integration
+
+**Consumed Events:**
+
+- **payment-succeeded**: Triggers ticket generation flow
+  - Payload: `{ OrderId, CustomerId, Amount, ... }`
+
+**Published Events:**
+
+- **ticket-issued**: Published after successful ticket generation
+  - Payload: `{ TicketId, OrderId, CustomerEmail, TicketPdfUrl, QrCodeData, ... }`
+  - Consumed by Notification service to send tickets via email
+
+## PDF Generation
+
+The service uses a PDF library to generate ticket PDFs with:
+
+- Event name and details
+- Customer information
+- Seat information (section, row, number)
+- Purchase price
+- QR code for venue scanning
+- Ticket ID and order reference
+- Generation timestamp
+
+## File Storage
+
+Tickets are stored in a local directory:
+
+- **Development**: `/app/data/tickets/`
+- **Docker**: Mounted volume `fulfillment-data:/app/data/tickets`
+- **Filename format**: `{ticketId}.pdf`
+
+## Architecture Notes
+
+- Uses **MediatR** for CQRS-style command/query handling
+- Infrastructure services registered via `AddInfrastructure()` extension method
+- Listens to Kafka for `payment-succeeded` events
+- Queries Ordering service via HTTP for order enrichment
+- Stores PDFs locally (could be extended to use S3, Azure Blob, etc.)
+- Publishes `ticket-issued` events for downstream notification delivery
+
+## Error Handling
+
+- If ticket generation fails, status is set to `Failed`
+- Failed tickets can be retried via background job
+- Missing PDF files return 404 but ticket record may still exist
+- Idempotency: Re-processing same OrderId won't create duplicate tickets

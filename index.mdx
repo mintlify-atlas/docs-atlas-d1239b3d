@@ -1,97 +1,239 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "SpecKit Ticketing Platform"
+mode: "custom"
 ---
 
-## Setting up
+<div className="relative overflow-hidden dark:bg-[#0f1117] bg-white py-20">
+  <div className="absolute inset-0 bg-gradient-to-br from-[#94cb04]/10 via-transparent to-[#545454]/5 dark:from-[#94cb04]/5 dark:via-transparent dark:to-[#545454]/10"></div>
+  <div className="relative max-w-7xl mx-auto px-6 lg:px-8">
+    <div className="lg:grid lg:grid-cols-12 lg:gap-12 items-center">
+      <div className="lg:col-span-7">
+        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold dark:text-white text-gray-900 mb-6">
+          Enterprise Event Ticketing Platform
+        </h1>
+        <p className="text-lg sm:text-xl dark:text-gray-400 text-gray-600 mb-8 max-w-2xl">
+          Build scalable ticketing systems with microservices architecture, CQRS, and event-driven design. Distributed reservations, real-time inventory, and high-availability seat management out of the box.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <a 
+            href="/quickstart" 
+            className="inline-flex items-center justify-center px-6 py-3 text-base font-semibold rounded-lg bg-[#94cb04] text-gray-900 hover:bg-[#7ea803] transition-colors no-underline"
+          >
+            Get Started
+            <svg className="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </a>
+          <a 
+            href="/concepts/architecture" 
+            className="inline-flex items-center justify-center px-6 py-3 text-base font-semibold rounded-lg border dark:border-[#27272a] border-gray-200 dark:bg-white/10 bg-gray-50 dark:text-white text-gray-900 dark:hover:bg-white/20 hover:bg-gray-100 transition-colors no-underline"
+          >
+            Explore Architecture
+          </a>
+        </div>
+      </div>
+      <div className="hidden lg:block lg:col-span-5 mt-12 lg:mt-0">
+        <div className="relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-[#94cb04]/20 to-[#545454]/20 dark:from-[#94cb04]/10 dark:to-[#545454]/10 blur-3xl"></div>
+          <div className="relative dark:bg-[#1a1d27] bg-gray-50 p-6 rounded-2xl dark:border-[#27272a] border border-gray-200 shadow-xl">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-3 h-3 rounded-full bg-red-500"></div>
+              <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+              <div className="w-3 h-3 rounded-full bg-green-500"></div>
+            </div>
+            <pre className="text-sm dark:text-gray-300 text-gray-700 overflow-x-auto"><code>{`docker compose up -d
 
-Get your documentation site up and running in minutes.
+✓ Catalog Service   [Ready]
+✓ Inventory Service [Ready]
+✓ Ordering Service  [Ready]
+✓ Payment Service   [Ready]
+✓ Kafka             [Ready]
+✓ PostgreSQL        [Ready]
+✓ Redis             [Ready]
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+🎫 Platform ready!`}</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
-## Make it yours
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-semibold dark:text-white text-gray-900 mb-4">
+    Quick Start
+  </h2>
+  <p className="text-base dark:text-gray-400 text-gray-600 mb-8">
+    Get the platform running in minutes and complete your first ticket purchase workflow.
+  </p>
+  
+  <Steps>
+    <Step title="Start the infrastructure">
+      Launch all microservices, Kafka, PostgreSQL, and Redis with Docker Compose:
+      
+      ```bash
+      cd infra
+      docker compose up -d
+      ```
+      
+      All services will start with health checks. Wait approximately 30 seconds for initialization.
+    </Step>
+    
+    <Step title="Verify services are healthy">
+      Check that all services respond to health endpoints:
+      
+      ```bash
+      curl http://localhost:50001/health  # Catalog
+      curl http://localhost:50002/health  # Inventory
+      curl http://localhost:5003/health   # Ordering
+      ```
+      
+      <Accordion title="Expected response">
+        ```json
+        {
+          "status": "Healthy",
+          "service": "Catalog"
+        }
+        ```
+      </Accordion>
+    </Step>
+    
+    <Step title="Make your first reservation">
+      Reserve a seat using the Inventory service:
+      
+      ```bash
+      curl -X POST http://localhost:50002/reservations \
+        -H "Content-Type: application/json" \
+        -d '{
+          "seatId": "550e8400-e29b-41d4-a716-446655440002",
+          "customerId": "user-123"
+        }'
+      ```
+      
+      The reservation will be held for 30 minutes with distributed Redis locks.
+    </Step>
+    
+    <Step title="Add to cart and checkout">
+      After waiting 2-3 seconds for the Kafka event to propagate, add the seat to your cart:
+      
+      ```bash
+      curl -X POST http://localhost:5003/cart/add \
+        -H "Content-Type: application/json" \
+        -d '{
+          "reservationId": "<reservation-id-from-step-3>",
+          "seatId": "550e8400-e29b-41d4-a716-446655440002",
+          "price": 50.00,
+          "userId": "user-123"
+        }'
+      ```
+      
+      Then complete checkout to trigger the payment and fulfillment pipeline. See the [Frontend Integration Guide](/guides/frontend-integration) for complete E2E workflow details.
+    </Step>
+  </Steps>
+</div>
 
-Design a docs site that looks great and empowers your users.
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-semibold dark:text-white text-gray-900 mb-4">
+    Explore by Topic
+  </h2>
+  <p className="text-base dark:text-gray-400 text-gray-600 mb-8">
+    Dive into the architecture patterns and services that power the platform.
+  </p>
+  
+  <CardGroup cols={3}>
+    <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+      Understand the hexagonal architecture, bounded contexts, and service communication patterns.
+    </Card>
+    <Card title="Microservices" icon="cubes" href="/concepts/microservices">
+      Explore the seven microservices: Catalog, Inventory, Ordering, Payment, Fulfillment, Notification, and Identity.
+    </Card>
+    <Card title="Event-Driven Design" icon="bolt" href="/concepts/event-driven">
+      Learn how Kafka orchestrates reservation workflows and asynchronous ticket fulfillment.
+    </Card>
+    <Card title="CQRS Pattern" icon="arrows-split-up-and-left" href="/concepts/cqrs">
+      Separate read and write models with MediatR and optimize for high-concurrency seat selection.
+    </Card>
+    <Card title="Distributed Locks" icon="lock" href="/services/inventory">
+      Prevent double-booking with Redis-based distributed locks and TTL-based reservation expiration.
+    </Card>
+    <Card title="API Reference" icon="code" href="/api/catalog/get-events">
+      Complete REST API documentation for all services with request/response schemas and error codes.
+    </Card>
+  </CardGroup>
+</div>
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-semibold dark:text-white text-gray-900 mb-4">
+    Services
+  </h2>
+  <p className="text-base dark:text-gray-400 text-gray-600 mb-8">
+    Each service is independently deployable and follows clean architecture principles.
+  </p>
+  
+  <CardGroup cols={2}>
+    <Card title="Catalog Service" icon="calendar-days" href="/services/catalog">
+      Manages events, venues, and seat maps. Provides read-optimized queries for event discovery.
+    </Card>
+    <Card title="Inventory Service" icon="warehouse" href="/services/inventory">
+      Handles seat reservations with Redis locks. Publishes reservation-created events to Kafka.
+    </Card>
+    <Card title="Ordering Service" icon="cart-shopping" href="/services/ordering">
+      Manages shopping carts and order lifecycle. Consumes reservation events and triggers payments.
+    </Card>
+    <Card title="Payment Service" icon="credit-card" href="/services/payment">
+      Processes payments and publishes success/failure events. Integrates with payment gateways.
+    </Card>
+    <Card title="Fulfillment Service" icon="ticket" href="/services/fulfillment">
+      Generates tickets after successful payment. Stores ticket PDFs and sends to customers.
+    </Card>
+    <Card title="Notification Service" icon="envelope" href="/services/notification">
+      Sends email and SMS notifications for order confirmations and ticket delivery.
+    </Card>
+  </CardGroup>
+</div>
 
-## Create beautiful pages
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-semibold dark:text-white text-gray-900 mb-4">
+    Deployment & Operations
+  </h2>
+  <p className="text-base dark:text-gray-400 text-gray-600 mb-8">
+    Production-ready deployment guides and operational best practices.
+  </p>
+  
+  <CardGroup cols={2}>
+    <Card title="Deployment Guide" icon="rocket" href="/guides/deployment">
+      Deploy to Docker, Kubernetes, or cloud platforms with infrastructure-as-code templates.
+    </Card>
+    <Card title="Testing Strategy" icon="vial" href="/guides/testing-strategy">
+      Unit tests, integration tests, and ATDD workflows with xUnit and Docker Compose.
+    </Card>
+    <Card title="Kafka Events" icon="message" href="/guides/kafka-events">
+      Event schemas, topic configuration, and consumer patterns for asynchronous workflows.
+    </Card>
+    <Card title="Frontend Integration" icon="browser" href="/guides/frontend-integration">
+      Complete guide for integrating with the Next.js frontend and handling reservation flows.
+    </Card>
+  </CardGroup>
+</div>
 
-Everything you need to create world-class documentation.
-
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<div className="mt-20 mb-16 max-w-5xl mx-auto px-6">
+  <div className="dark:bg-[#1a1d27] bg-gray-50 rounded-2xl dark:border-[#27272a] border border-gray-200 p-8 lg:p-12">
+    <div className="max-w-3xl">
+      <h2 className="text-2xl sm:text-3xl font-semibold dark:text-white text-gray-900 mb-4">
+        Ready to build?
+      </h2>
+      <p className="text-base dark:text-gray-400 text-gray-600 mb-6">
+        Start with our quickstart guide and have a working ticketing platform running in under 5 minutes.
+      </p>
+      <a 
+        href="/quickstart" 
+        className="inline-flex items-center justify-center px-6 py-3 text-base font-semibold rounded-lg bg-[#94cb04] text-gray-900 hover:bg-[#7ea803] transition-colors no-underline"
+      >
+        Get Started Now
+        <svg className="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+      </a>
+    </div>
+  </div>
+</div>

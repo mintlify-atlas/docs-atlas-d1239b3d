@@ -1,0 +1,308 @@
+---
+title: Add to Cart
+description: Add a reserved seat to the user's cart
+---
+
+## Endpoint
+
+```http
+POST /cart/add
+```
+
+Adds a reserved seat to the user's cart. Creates a draft order if one doesn't exist for the user, or adds the seat to an existing draft order.
+
+## Base URL
+
+```
+http://localhost:5003
+```
+
+## Authentication
+
+**At least one required:**
+- `userId` - For authenticated users
+- `guestToken` - For anonymous/guest checkout
+
+If both `userId` and `guestToken` are null or empty, the request will return a `400 Bad Request` error.
+
+## Request Body
+
+```json
+{
+  "reservationId": "8bf7fffc-9ff5-401c-9d2d-86f525f42e40",
+  "seatId": "550e8400-e29b-41d4-a716-446655440002",
+  "price": 50.00,
+  "userId": "user-123",
+  "guestToken": null
+}
+```
+
+### Parameters
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `reservationId` | UUID | No | ID of the reservation from Inventory service (can be null) |
+| `seatId` | UUID | **Yes** | ID of the seat to add to cart |
+| `price` | decimal | **Yes** | Price of the seat |
+| `userId` | string | Conditional* | ID of the authenticated user |
+| `guestToken` | string | Conditional* | Token for anonymous checkout |
+
+*At least one of `userId` or `guestToken` must be provided.
+
+## Response
+
+### Success Response (200 OK)
+
+```json
+{
+  "id": "order-uuid-001",
+  "userId": "user-123",
+  "guestToken": null,
+  "totalAmount": 50.00,
+  "state": "draft",
+  "createdAt": "2026-02-24T15:15:00Z",
+  "paidAt": null,
+  "items": [
+    {
+      "id": "item-001",
+      "seatId": "550e8400-e29b-41d4-a716-446655440002",
+      "price": 50.00
+    }
+  ]
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Unique order identifier |
+| `userId` | string \| null | User ID (null if guest) |
+| `guestToken` | string \| null | Guest token (null if authenticated) |
+| `totalAmount` | decimal | Total amount for all items in cart |
+| `state` | string | Order state (see [Order States](#order-states)) |
+| `createdAt` | DateTime | Order creation timestamp |
+| `paidAt` | DateTime \| null | Payment timestamp (null for draft orders) |
+| `items` | array | Array of order items |
+| `items[].id` | UUID | Order item identifier |
+| `items[].seatId` | UUID | Seat identifier |
+| `items[].price` | decimal | Item price |
+
+## Order States
+
+The `state` field can have the following values:
+
+| State | Description |
+|-------|-------------|
+| `draft` | Cart created, waiting for more items or checkout |
+| `pending` | Checkout completed, awaiting payment |
+| `completed` | Payment completed successfully |
+| `cancelled` | Order was cancelled |
+
+## Error Responses
+
+### 400 Bad Request - Missing Authentication
+
+```json
+{
+  "error": "Either UserId or GuestToken must be provided"
+}
+```
+
+Both `userId` and `guestToken` are null or empty.
+
+### 400 Bad Request - Reservation Not Found
+
+```json
+{
+  "error": "Reservation not found"
+}
+```
+
+The reservation has not been processed yet by the Kafka event consumer. **Wait 2-3 seconds** after creating a reservation before calling this endpoint.
+
+### 400 Bad Request - Seat Already in Cart
+
+```json
+{
+  "error": "Seat is already in the cart"
+}
+```
+
+The specified seat has already been added to the user's cart.
+
+### 400 Bad Request - Reservation Expired
+
+```json
+{
+  "error": "Reservation has expired"
+}
+```
+
+The reservation has expired (30-minute window). Create a new reservation and try again.
+
+## Kafka Event Consumption
+
+This endpoint depends on the `reservation-created` event from the Inventory service:
+
+1. User creates reservation via `POST /reservations` (Inventory service)
+2. Inventory publishes `reservation-created` event to Kafka
+3. Ordering service consumes the event and stores reservation data
+4. **Wait 2-3 seconds** for event processing
+5. Call `POST /cart/add` with the `reservationId`
+
+<Warning>
+  Always wait 2-3 seconds after creating a reservation before calling `/cart/add` to ensure the Kafka event has been processed.
+</Warning>
+
+## Adding Multiple Seats
+
+To add multiple seats to the same cart, call this endpoint once for each seat:
+
+```javascript
+// Add first seat
+const order1 = await fetch('http://localhost:5003/cart/add', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    reservationId: 'res-id-1',
+    seatId: 'seat-1',
+    price: 50.00,
+    userId: 'user-123'
+  })
+}).then(r => r.json());
+
+// Add second seat - same userId will update existing draft order
+const order2 = await fetch('http://localhost:5003/cart/add', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    reservationId: 'res-id-2',
+    seatId: 'seat-2',
+    price: 50.00,
+    userId: 'user-123'
+  })
+}).then(r => r.json());
+
+// order2.totalAmount = 100.00
+// order2.items.length = 2
+```
+
+The system will:
+- Find the existing `draft` order for the user
+- Add the new seat to the order
+- Update the `totalAmount`
+
+## Examples
+
+### cURL - Authenticated User
+
+```bash
+curl -X POST http://localhost:5003/cart/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reservationId": "8bf7fffc-9ff5-401c-9d2d-86f525f42e40",
+    "seatId": "550e8400-e29b-41d4-a716-446655440002",
+    "price": 50.00,
+    "userId": "user-123"
+  }'
+```
+
+### cURL - Guest User
+
+```bash
+curl -X POST http://localhost:5003/cart/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reservationId": "8bf7fffc-9ff5-401c-9d2d-86f525f42e40",
+    "seatId": "550e8400-e29b-41d4-a716-446655440002",
+    "price": 50.00,
+    "guestToken": "guest-abc123xyz"
+  }'
+```
+
+### JavaScript/TypeScript
+
+```javascript
+async function addToCart(reservationId, seatId, price, userId) {
+  const response = await fetch('http://localhost:5003/cart/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      reservationId,
+      seatId,
+      price,
+      userId
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to add to cart');
+  }
+
+  return response.json();
+}
+
+// Usage
+try {
+  const order = await addToCart(
+    '8bf7fffc-9ff5-401c-9d2d-86f525f42e40',
+    '550e8400-e29b-41d4-a716-446655440002',
+    50.00,
+    'user-123'
+  );
+  console.log('Order:', order.id);
+  console.log('Total:', order.totalAmount);
+} catch (error) {
+  console.error('Error:', error.message);
+}
+```
+
+### Python
+
+```python
+import requests
+
+def add_to_cart(reservation_id, seat_id, price, user_id):
+    """Add a seat to the cart"""
+    url = 'http://localhost:5003/cart/add'
+    payload = {
+        'reservationId': reservation_id,
+        'seatId': seat_id,
+        'price': price,
+        'userId': user_id
+    }
+    
+    response = requests.post(url, json=payload)
+    response.raise_for_status()
+    return response.json()
+
+# Usage
+try:
+    order = add_to_cart(
+        reservation_id='8bf7fffc-9ff5-401c-9d2d-86f525f42e40',
+        seat_id='550e8400-e29b-41d4-a716-446655440002',
+        price=50.00,
+        user_id='user-123'
+    )
+    print(f"Order ID: {order['id']}")
+    print(f"Total: ${order['totalAmount']}")
+except requests.exceptions.RequestException as e:
+    print(f"Error: {e}")
+```
+
+## Workflow
+
+Typical purchase flow:
+
+1. **Get Event** - `GET /events/{eventId}/seatmap` (Catalog service)
+2. **Reserve Seat** - `POST /reservations` (Inventory service)
+3. **Wait** - Wait 2-3 seconds for Kafka event processing
+4. **Add to Cart** - `POST /cart/add` (this endpoint)
+5. **Checkout** - `POST /orders/checkout` (Ordering service)
+
+## Related Endpoints
+
+- [Checkout](/api/ordering/checkout) - Complete the order
+- [Get Order](/api/ordering/get-order) - Retrieve order details

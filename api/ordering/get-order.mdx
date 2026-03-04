@@ -1,0 +1,288 @@
+---
+title: Get Order
+description: Retrieve order details by ID
+---
+
+## Endpoint
+
+```http
+GET /orders/{id}
+```
+
+Gets order details by ID. This endpoint is primarily used by the Fulfillment service for ticket enrichment.
+
+## Base URL
+
+```
+http://localhost:5003
+```
+
+## Authentication
+
+No authentication required for this endpoint.
+
+## Path Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | UUID | **Yes** | The order ID |
+
+## Response
+
+### Success Response (200 OK)
+
+```json
+{
+  "orderId": "order-uuid-001",
+  "customerEmail": "user-123",
+  "eventId": "00000000-0000-0000-0000-000000000000",
+  "eventName": "Event Details Not Implemented",
+  "seatNumber": "Seat-550e8400-e29b-41d4-a716-446655440002",
+  "price": 50.00,
+  "currency": "USD"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `orderId` | UUID | Unique order identifier |
+| `customerEmail` | string | Customer email (currently returns userId or "guest@example.com") |
+| `eventId` | UUID | Event identifier (currently not implemented, returns empty UUID) |
+| `eventName` | string | Event name (currently not implemented) |
+| `seatNumber` | string | Seat identifier string |
+| `price` | decimal | Total order amount |
+| `currency` | string | Currency code (always "USD") |
+
+<Note>
+  This endpoint returns a simplified enrichment format. Some fields like `eventId` and `eventName` are placeholders and will be implemented when integration with the Catalog service is added.
+</Note>
+
+## Error Responses
+
+### 404 Not Found
+
+```json
+{
+  "error": "Order not found"
+}
+```
+
+No order exists with the provided ID.
+
+## Examples
+
+### cURL
+
+```bash
+curl -X GET http://localhost:5003/orders/order-uuid-001 \
+  -H "Accept: application/json"
+```
+
+### JavaScript/TypeScript
+
+```javascript
+async function getOrder(orderId) {
+  const response = await fetch(
+    `http://localhost:5003/orders/${orderId}`,
+    {
+      headers: { 'Accept': 'application/json' }
+    }
+  );
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error('Order not found');
+    }
+    throw new Error('Failed to fetch order');
+  }
+
+  return response.json();
+}
+
+// Usage
+try {
+  const order = await getOrder('order-uuid-001');
+  console.log('Order ID:', order.orderId);
+  console.log('Customer:', order.customerEmail);
+  console.log('Seat:', order.seatNumber);
+  console.log('Price:', order.price, order.currency);
+} catch (error) {
+  console.error('Error:', error.message);
+}
+```
+
+### Python
+
+```python
+import requests
+
+def get_order(order_id):
+    """Get order details by ID"""
+    url = f'http://localhost:5003/orders/{order_id}'
+    response = requests.get(url)
+    
+    if response.status_code == 404:
+        raise ValueError('Order not found')
+    
+    response.raise_for_status()
+    return response.json()
+
+# Usage
+try:
+    order = get_order('order-uuid-001')
+    print(f"Order ID: {order['orderId']}")
+    print(f"Customer: {order['customerEmail']}")
+    print(f"Seat: {order['seatNumber']}")
+    print(f"Price: {order['price']} {order['currency']}")
+except ValueError as e:
+    print(f"Error: {e}")
+except requests.exceptions.RequestException as e:
+    print(f"Error: {e}")
+```
+
+### TypeScript with Type Safety
+
+```typescript
+interface OrderEnrichment {
+  orderId: string;
+  customerEmail: string;
+  eventId: string;
+  eventName: string;
+  seatNumber: string;
+  price: number;
+  currency: string;
+}
+
+async function getOrder(orderId: string): Promise<OrderEnrichment> {
+  const response = await fetch(
+    `http://localhost:5003/orders/${orderId}`,
+    {
+      headers: { 'Accept': 'application/json' }
+    }
+  );
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error('Order not found');
+    }
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// Usage
+try {
+  const order: OrderEnrichment = await getOrder('order-uuid-001');
+  console.log(`Order ${order.orderId}`);
+  console.log(`Customer: ${order.customerEmail}`);
+  console.log(`Seat: ${order.seatNumber}`);
+  console.log(`Price: ${order.price} ${order.currency}`);
+} catch (error) {
+  console.error('Error:', error instanceof Error ? error.message : error);
+}
+```
+
+## Use Cases
+
+### Fulfillment Service Integration
+
+This endpoint is designed for the Fulfillment service to retrieve order information when enriching tickets:
+
+```javascript
+// In Fulfillment service
+async function enrichTicket(orderId) {
+  // Get order details from Ordering service
+  const orderDetails = await fetch(
+    `http://localhost:5003/orders/${orderId}`
+  ).then(r => r.json());
+
+  // Create enriched ticket
+  const ticket = {
+    ticketId: generateTicketId(),
+    orderId: orderDetails.orderId,
+    customerEmail: orderDetails.customerEmail,
+    eventName: orderDetails.eventName,
+    seatNumber: orderDetails.seatNumber,
+    price: orderDetails.price,
+    currency: orderDetails.currency,
+    qrCode: generateQRCode(orderDetails.orderId),
+    createdAt: new Date().toISOString()
+  };
+
+  return ticket;
+}
+```
+
+### Order Status Verification
+
+Check if an order exists and retrieve its details:
+
+```javascript
+async function verifyOrder(orderId) {
+  try {
+    const order = await getOrder(orderId);
+    return {
+      exists: true,
+      details: order
+    };
+  } catch (error) {
+    if (error.message === 'Order not found') {
+      return { exists: false };
+    }
+    throw error;
+  }
+}
+
+// Usage
+const verification = await verifyOrder('order-uuid-001');
+if (verification.exists) {
+  console.log('Order found:', verification.details);
+} else {
+  console.log('Order does not exist');
+}
+```
+
+## Implementation Notes
+
+The current implementation (from `/home/daytona/workspace/source/services/ordering/src/Api/Controllers/OrdersController.cs:61-82`) has some limitations:
+
+- **customerEmail**: Returns `userId` if available, otherwise `"guest@example.com"`. Real email integration with Identity service is pending.
+- **eventId**: Returns empty UUID (`00000000-0000-0000-0000-000000000000`). Requires tracing back from SeatId to Event.
+- **eventName**: Returns placeholder text. Requires querying the Catalog service.
+- **seatNumber**: Returns a formatted string `"Seat-{seatId}"` from the first order item.
+
+These fields will be fully implemented when cross-service communication is enhanced.
+
+## Full Order Object
+
+If you need the complete order object with all items and states, you should query the database directly or extend this endpoint. The current response format is optimized for Fulfillment service enrichment needs.
+
+For internal use, the full order object includes:
+
+```typescript
+interface Order {
+  id: string;              // UUID
+  userId?: string;         // null if guest
+  guestToken?: string;     // null if authenticated
+  totalAmount: number;
+  state: 'draft' | 'pending' | 'completed' | 'cancelled';
+  createdAt: Date;
+  paidAt?: Date;           // null until payment
+  items: OrderItem[];
+}
+
+interface OrderItem {
+  id: string;              // UUID
+  orderId: string;         // UUID
+  seatId: string;          // UUID
+  price: number;
+}
+```
+
+## Related Endpoints
+
+- [Add to Cart](/api/ordering/add-to-cart) - Add seats to cart
+- [Checkout](/api/ordering/checkout) - Complete the order

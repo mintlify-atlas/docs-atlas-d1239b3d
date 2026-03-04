@@ -1,0 +1,428 @@
+---
+title: 'Process payment'
+api: 'POST /payments'
+description: 'Process a payment for an order with validation and event-driven fulfillment'
+---
+
+Process a payment transaction for a customer order. This endpoint validates the order state, checks the reservation if provided, simulates the payment processing, and publishes events to Kafka for downstream services.
+
+<Info>
+The payment service uses a simulated payment gateway for demonstration purposes. In production, this would integrate with real payment processors like Stripe, PayPal, or other payment gateways.
+</Info>
+
+## Payment processing flow
+
+When a payment is submitted, the service follows this workflow:
+
+1. **Idempotency check** - Verifies if a successful payment already exists for the order
+2. **Order validation** - Confirms the order exists, belongs to the customer, and has the correct amount
+3. **Reservation validation** - Re-validates the seat reservation if a `reservationId` is provided
+4. **Payment record creation** - Creates a payment record with `pending` status
+5. **Payment simulation** - Simulates the payment gateway processing
+6. **Event publishing** - Publishes either `payment-succeeded` or `payment-failed` event to Kafka
+
+<Note>
+This endpoint is idempotent. Multiple requests with the same `orderId` will return the existing successful payment if one exists, preventing duplicate charges.
+</Note>
+
+## Request parameters
+
+<ParamField path="body.orderId" type="string" required>
+  Unique identifier of the order to process payment for. Must be a valid GUID.
+</ParamField>
+
+<ParamField path="body.customerId" type="string" required>
+  Unique identifier of the customer making the payment. Used for authorization and validation.
+</ParamField>
+
+<ParamField path="body.reservationId" type="string">
+  Optional seat reservation identifier. If provided, the service will re-validate that the reservation is still active and belongs to the customer before processing payment.
+</ParamField>
+
+<ParamField path="body.amount" type="number" required>
+  Payment amount in decimal format. Must be greater than zero and match the order total.
+</ParamField>
+
+<ParamField path="body.currency" type="string" default="USD">
+  Three-letter ISO currency code (e.g., USD, EUR, GBP). Defaults to USD if not specified.
+</ParamField>
+
+<ParamField path="body.paymentMethod" type="string" default="credit_card">
+  Payment method identifier. Supported values: `credit_card`, `debit_card`, `paypal`, `apple_pay`, `google_pay`.
+</ParamField>
+
+## Response fields
+
+<ResponseField name="success" type="boolean" required>
+  Indicates whether the payment processing was successful.
+</ResponseField>
+
+<ResponseField name="errorMessage" type="string">
+  Human-readable error message if the payment failed. Only present when `success` is `false`.
+</ResponseField>
+
+<ResponseField name="payment" type="object">
+  Payment transaction details. Only present when a payment record was created.
+  
+  <Expandable title="payment properties">
+    <ResponseField name="id" type="string">
+      Unique identifier for this payment transaction (GUID).
+    </ResponseField>
+    
+    <ResponseField name="orderId" type="string">
+      The order this payment is associated with.
+    </ResponseField>
+    
+    <ResponseField name="customerId" type="string">
+      The customer who made the payment.
+    </ResponseField>
+    
+    <ResponseField name="reservationId" type="string">
+      The reservation ID if one was provided in the request.
+    </ResponseField>
+    
+    <ResponseField name="amount" type="number">
+      Payment amount in decimal format.
+    </ResponseField>
+    
+    <ResponseField name="currency" type="string">
+      Three-letter ISO currency code.
+    </ResponseField>
+    
+    <ResponseField name="paymentMethod" type="string">
+      Payment method used for this transaction.
+    </ResponseField>
+    
+    <ResponseField name="status" type="string">
+      Current payment status. Possible values: `pending`, `succeeded`, `failed`.
+    </ResponseField>
+    
+    <ResponseField name="errorCode" type="string">
+      Machine-readable error code if payment failed (e.g., `INSUFFICIENT_FUNDS`, `CARD_DECLINED`).
+    </ResponseField>
+    
+    <ResponseField name="errorMessage" type="string">
+      Human-readable error description if payment failed.
+    </ResponseField>
+    
+    <ResponseField name="failureReason" type="string">
+      Detailed reason for payment failure provided by the payment gateway.
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string">
+      ISO 8601 timestamp when the payment record was created.
+    </ResponseField>
+    
+    <ResponseField name="processedAt" type="string">
+      ISO 8601 timestamp when the payment was processed (succeeded or failed).
+    </ResponseField>
+    
+    <ResponseField name="isSimulated" type="boolean">
+      Indicates if this was a simulated payment (true in development/testing).
+    </ResponseField>
+    
+    <ResponseField name="simulatedResponse" type="string">
+      Details about the simulated payment response for debugging purposes.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Kafka events
+
+The payment service publishes events to Kafka topics to enable asynchronous processing by other services.
+
+### payment-succeeded event
+
+Published when a payment is successfully processed. The fulfillment service listens to this event to generate and issue tickets.
+
+```json
+{
+  "paymentId": "550e8400-e29b-41d4-a716-446655440000",
+  "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "customerId": "a8098c1a-f86e-11da-bd1a-00112444be1e",
+  "reservationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "amount": 150.00,
+  "currency": "USD",
+  "paymentMethod": "credit_card",
+  "transactionId": "txn_1234567890",
+  "processedAt": "2026-03-04T15:30:00Z",
+  "status": "succeeded"
+}
+```
+
+<Info>
+The **fulfillment service** consumes this event to automatically generate tickets and send them to customers. This asynchronous workflow ensures payment confirmation is immediate while ticket generation happens in the background.
+</Info>
+
+### payment-failed event
+
+Published when a payment fails processing. Services can use this to send notifications or trigger retry logic.
+
+```json
+{
+  "paymentId": "550e8400-e29b-41d4-a716-446655440000",
+  "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "customerId": "a8098c1a-f86e-11da-bd1a-00112444be1e",
+  "reservationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "amount": 150.00,
+  "currency": "USD",
+  "paymentMethod": "credit_card",
+  "errorCode": "INSUFFICIENT_FUNDS",
+  "errorMessage": "Card declined due to insufficient funds",
+  "failureReason": "The payment gateway returned error code 51",
+  "attemptedAt": "2026-03-04T15:30:00Z",
+  "status": "failed"
+}
+```
+
+## Error responses
+
+<Accordion title="400 - Bad Request">
+  Returned when the request is malformed or validation fails.
+
+  **Common causes:**
+  - Missing required fields (`orderId`, `customerId`, `amount`)
+  - Invalid GUID format for IDs
+  - Amount is zero or negative
+  - Order validation failed (order doesn't exist or doesn't belong to customer)
+  - Reservation validation failed (expired or doesn't belong to customer)
+
+  ```json
+  {
+    "success": false,
+    "errorMessage": "Order validation failed: Order not found or doesn't belong to customer",
+    "payment": null
+  }
+  ```
+</Accordion>
+
+<Accordion title="401 - Unauthorized">
+  The customer is not authorized to process payment for this order.
+
+  ```json
+  {
+    "success": false,
+    "errorMessage": "Unauthorized: Customer does not own this order",
+    "payment": null
+  }
+  ```
+</Accordion>
+
+<Accordion title="404 - Not Found">
+  The specified order could not be found in the system.
+
+  ```json
+  {
+    "success": false,
+    "errorMessage": "Order not found",
+    "payment": null
+  }
+  ```
+</Accordion>
+
+<Accordion title="422 - Unprocessable Entity">
+  The payment was processed but failed at the payment gateway level.
+
+  ```json
+  {
+    "success": false,
+    "errorMessage": "Payment failed: Card declined",
+    "payment": {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "status": "failed",
+      "errorCode": "CARD_DECLINED",
+      "errorMessage": "Card declined",
+      "failureReason": "Issuing bank rejected the transaction"
+    }
+  }
+  ```
+</Accordion>
+
+<Accordion title="500 - Internal Server Error">
+  An unexpected error occurred during payment processing.
+
+  ```json
+  {
+    "success": false,
+    "errorMessage": "Payment processing error: Database connection timeout",
+    "payment": null
+  }
+  ```
+</Accordion>
+
+<RequestExample>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:5004/payments \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    "customerId": "a8098c1a-f86e-11da-bd1a-00112444be1e",
+    "reservationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "amount": 150.00,
+    "currency": "USD",
+    "paymentMethod": "credit_card"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:5004/payments', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    orderId: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+    customerId: 'a8098c1a-f86e-11da-bd1a-00112444be1e',
+    reservationId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+    amount: 150.00,
+    currency: 'USD',
+    paymentMethod: 'credit_card'
+  })
+});
+
+const data = await response.json();
+console.log(data);
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'http://localhost:5004/payments',
+    headers={'Content-Type': 'application/json'},
+    json={
+        'orderId': '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+        'customerId': 'a8098c1a-f86e-11da-bd1a-00112444be1e',
+        'reservationId': 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+        'amount': 150.00,
+        'currency': 'USD',
+        'paymentMethod': 'credit_card'
+    }
+)
+
+data = response.json()
+print(data)
+```
+
+```go Go
+package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "net/http"
+)
+
+func main() {
+    payload := map[string]interface{}{
+        "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "customerId": "a8098c1a-f86e-11da-bd1a-00112444be1e",
+        "reservationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "amount": 150.00,
+        "currency": "USD",
+        "paymentMethod": "credit_card",
+    }
+    
+    jsonData, _ := json.Marshal(payload)
+    
+    resp, err := http.Post(
+        "http://localhost:5004/payments",
+        "application/json",
+        bytes.NewBuffer(jsonData),
+    )
+    
+    // Handle response...
+}
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200 - Success
+{
+  "success": true,
+  "errorMessage": null,
+  "payment": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    "customerId": "a8098c1a-f86e-11da-bd1a-00112444be1e",
+    "reservationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "amount": 150.00,
+    "currency": "USD",
+    "paymentMethod": "credit_card",
+    "status": "succeeded",
+    "errorCode": null,
+    "errorMessage": null,
+    "failureReason": null,
+    "createdAt": "2026-03-04T15:30:00Z",
+    "processedAt": "2026-03-04T15:30:02Z",
+    "isSimulated": true,
+    "simulatedResponse": "Success - TransactionId: txn_1234567890"
+  }
+}
+```
+
+```json 422 - Payment Failed
+{
+  "success": false,
+  "errorMessage": "Payment failed: Insufficient funds",
+  "payment": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "orderId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    "customerId": "a8098c1a-f86e-11da-bd1a-00112444be1e",
+    "reservationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "amount": 150.00,
+    "currency": "USD",
+    "paymentMethod": "credit_card",
+    "status": "failed",
+    "errorCode": "INSUFFICIENT_FUNDS",
+    "errorMessage": "Insufficient funds",
+    "failureReason": "The card has insufficient funds to complete this transaction",
+    "createdAt": "2026-03-04T15:30:00Z",
+    "processedAt": "2026-03-04T15:30:02Z",
+    "isSimulated": true,
+    "simulatedResponse": "Failed - INSUFFICIENT_FUNDS: Insufficient funds"
+  }
+}
+```
+
+</ResponseExample>
+
+## Integration notes
+
+<Warning>
+Always validate the order amount on the server side before calling this endpoint. Never trust client-supplied amounts without verification.
+</Warning>
+
+<Tip>
+Implement retry logic for transient failures (5xx errors), but **do not** retry 4xx errors as they indicate client-side issues that won't be resolved by retrying.
+</Tip>
+
+### Gateway integration points
+
+In a production environment, the `IPaymentSimulatorService` interface (source code: `services/payment/src/Application/Ports/IPaymentSimulatorService.cs`) would be replaced with actual payment gateway integrations such as:
+
+- **Stripe** - For credit card processing
+- **PayPal** - For PayPal and credit card processing
+- **Square** - For point-of-sale and online payments
+- **Adyen** - For global payment processing
+
+The service architecture supports multiple payment gateways through the port/adapter pattern, making it easy to add or switch payment providers.
+
+## Service configuration
+
+The payment service runs on port **5004** and connects to:
+
+- **PostgreSQL** - `bc_payment` schema for payment records
+- **Kafka** - `kafka:9092` for event publishing
+- **Ordering Service** - For order validation
+
+Environment variables (from docker-compose.yml:209-229):
+```bash
+ASPNETCORE_URLS=http://+:5004
+ConnectionStrings__Default=Host=postgres;Port=5432;Database=ticketing;Username=postgres;Password=postgres;SearchPath=bc_payment
+Kafka__BootstrapServers=kafka:9092
+```

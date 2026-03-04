@@ -1,0 +1,223 @@
+---
+title: Catalog Service
+description: Event catalog service managing events, venues, and seatmaps
+---
+
+## Overview
+
+The Catalog service is responsible for managing the event catalog, including event details, venues, and seatmaps. It provides read-only access to event information and seat availability for the ticketing platform.
+
+**Port:** 50001 (external), 5001 (internal)  
+**Database Schema:** `bc_catalog`  
+**Dependencies:** PostgreSQL
+
+## Responsibilities
+
+- Store and retrieve event information (name, description, date, pricing)
+- Manage venue seatmaps with section, row, and seat details
+- Provide event listings and detailed event views
+- Track seat status (available, reserved, sold)
+- Support querying events and seats by various criteria
+
+## API Endpoints
+
+All endpoints are accessed via the `EventsController`.
+
+### Get All Events
+
+<ParamField path="GET /events" type="endpoint">
+  Returns a list of all available events without seatmap details.
+</ParamField>
+
+```csharp
+[HttpGet]
+public async Task<IActionResult> GetAllEvents()
+{
+    var query = new GetAllEventsQuery();
+    var result = await _mediator.Send(query);
+    return Ok(result);
+}
+```
+
+**Response:** Array of event objects
+
+### Get Event by ID
+
+<ParamField path="GET /events/{id}" type="endpoint">
+  Returns a specific event by ID without seatmap details.
+</ParamField>
+
+<ParamField path="id" type="Guid" required>
+  The unique identifier of the event
+</ParamField>
+
+```csharp
+[HttpGet("{id}")]
+public async Task<IActionResult> GetEvent(Guid id)
+{
+    var query = new GetEventQuery(id);
+    var result = await _mediator.Send(query);
+    return result is not null ? Ok(result) : NotFound();
+}
+```
+
+**Response:** Single event object or 404 if not found
+
+### Get Event Seatmap
+
+<ParamField path="GET /events/{id}/seatmap" type="endpoint">
+  Returns a specific event with its complete seatmap including all seat details.
+</ParamField>
+
+<ParamField path="id" type="Guid" required>
+  The unique identifier of the event
+</ParamField>
+
+```csharp
+[HttpGet("{id}/seatmap")]
+public async Task<IActionResult> GetEventSeatmap(Guid id)
+{
+    var query = new GetEventSeatmapQuery(id);
+    var result = await _mediator.Send(query);
+    return result is not null ? Ok(result) : NotFound();
+}
+```
+
+**Response:** Event object with nested seat collection
+
+## Domain Models
+
+### Event
+
+Represents a ticketed event with associated seats.
+
+<ResponseField name="Id" type="Guid">
+  Unique event identifier
+</ResponseField>
+
+<ResponseField name="Name" type="string">
+  Event name
+</ResponseField>
+
+<ResponseField name="Description" type="string">
+  Event description
+</ResponseField>
+
+<ResponseField name="EventDate" type="DateTime">
+  Date and time of the event
+</ResponseField>
+
+<ResponseField name="BasePrice" type="decimal">
+  Base ticket price for the event
+</ResponseField>
+
+<ResponseField name="Seats" type="ICollection<Seat>">
+  Collection of all seats for this event
+</ResponseField>
+
+```csharp title="~/workspace/source/services/catalog/src/Domain/Entities/Event.cs"
+public class Event
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public DateTime EventDate { get; set; }
+    public decimal BasePrice { get; set; }
+    public ICollection<Seat> Seats { get; set; } = new List<Seat>();
+
+    public bool IsBookable() => EventDate > DateTime.UtcNow && HasAvailableSeats();
+    public bool HasAvailableSeats() => Seats.Any(s => s.IsAvailable());
+    public int GetAvailableSeatsCount() => Seats.Count(s => s.IsAvailable());
+}
+```
+
+### Seat
+
+Represents an individual seat within an event venue.
+
+<ResponseField name="Id" type="Guid">
+  Unique seat identifier
+</ResponseField>
+
+<ResponseField name="EventId" type="Guid">
+  Reference to the parent event
+</ResponseField>
+
+<ResponseField name="SectionCode" type="string">
+  Venue section code (e.g., "A", "B", "VIP")
+</ResponseField>
+
+<ResponseField name="RowNumber" type="int">
+  Row number within the section
+</ResponseField>
+
+<ResponseField name="SeatNumber" type="int">
+  Seat number within the row
+</ResponseField>
+
+<ResponseField name="Price" type="decimal">
+  Price for this specific seat
+</ResponseField>
+
+<ResponseField name="Status" type="string">
+  Current seat status: `available`, `reserved`, or `sold`
+</ResponseField>
+
+<ResponseField name="CurrentReservationId" type="Guid?">
+  ID of the active reservation (if reserved)
+</ResponseField>
+
+```csharp title="~/workspace/source/services/catalog/src/Domain/Entities/Seat.cs"
+public class Seat
+{
+    public const string StatusAvailable = "available";
+    public const string StatusReserved = "reserved";
+    public const string StatusSold = "sold";
+
+    public Guid Id { get; set; }
+    public Guid EventId { get; set; }
+    public string SectionCode { get; set; } = string.Empty;
+    public int RowNumber { get; set; }
+    public int SeatNumber { get; set; }
+    public decimal Price { get; set; }
+    public string Status { get; set; } = StatusAvailable;
+    public Guid? CurrentReservationId { get; set; }
+
+    public bool IsAvailable() => Status.Equals(StatusAvailable, StringComparison.OrdinalIgnoreCase);
+    public bool CanBeReserved() => IsAvailable();
+    public void Reserve() { /* ... */ }
+    public void Sell() { /* ... */ }
+    public void Release() { /* ... */ }
+}
+```
+
+## Configuration
+
+### Database Connection
+
+```json title="appsettings.json"
+{
+  "ConnectionStrings": {
+    "Default": "Host=postgres;Port=5432;Database=ticketing;Username=postgres;Password=postgres;SearchPath=bc_catalog"
+  }
+}
+```
+
+The service uses a dedicated PostgreSQL schema (`bc_catalog`) within the shared `ticketing` database.
+
+### CORS
+
+Configured to allow requests from the frontend running on `http://localhost:3000`.
+
+## Use Cases
+
+- **GetAllEvents**: Retrieves all events for display in event listings
+- **GetEvent**: Retrieves a single event's basic information
+- **GetEventSeatmap**: Retrieves an event with complete seatmap data for seat selection
+
+## Architecture Notes
+
+- Uses **MediatR** for CQRS-style command/query handling
+- Read-only service (no write operations exposed via API)
+- Seat status updates are managed by the Inventory service
+- Infrastructure services registered via `AddInfrastructure()` extension method

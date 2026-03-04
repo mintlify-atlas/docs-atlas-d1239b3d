@@ -1,0 +1,1099 @@
+---
+title: Installation
+description: Detailed installation guide for SpecKit Ticketing Platform with prerequisites, Docker setup, environment configuration, and troubleshooting
+---
+
+## Overview
+
+This guide provides comprehensive installation instructions for the SpecKit Ticketing Platform. You'll learn how to set up the development environment, configure services, and troubleshoot common issues.
+
+<Note>
+**Simplified Configuration**: This project does **NOT use `.env` files** or external secrets. All configuration is pre-loaded in `docker-compose.yml` and `appsettings.json` for immediate deployment without manual file management.
+</Note>
+
+## Prerequisites
+
+Before installing SpecKit, ensure your system meets these requirements.
+
+### System Requirements
+
+**Minimum Specifications:**
+- **RAM**: 8 GB (16 GB recommended for optimal performance)
+- **CPU**: 4 cores (8 cores recommended)
+- **Disk Space**: 10 GB free
+- **Operating System**: 
+  - macOS 12+ (Intel or Apple Silicon)
+  - Windows 10/11 with WSL2
+  - Linux (Ubuntu 20.04+, Debian 11+, Fedora 35+)
+
+### Required Software
+
+<Steps>
+  <Step title="Docker Desktop">
+    Docker Desktop 4.0+ with Docker Compose v2
+  </Step>
+  
+  <Step title="Git">
+    Git 2.30+ for version control
+  </Step>
+  
+  <Step title="(Optional) .NET SDK">
+    .NET 9 SDK - Only required for local backend development without Docker
+  </Step>
+  
+  <Step title="(Optional) Node.js">
+    Node.js 20+ and npm - Only required for local frontend development
+  </Step>
+</Steps>
+
+### Installing Docker Desktop
+
+<CodeGroup>
+
+```bash macOS (Homebrew)
+brew install --cask docker
+# Start Docker Desktop from Applications
+```
+
+```bash macOS (Direct Download)
+# Download from https://www.docker.com/products/docker-desktop
+# Install the .dmg file
+# Start Docker Desktop from Applications
+```
+
+```bash Windows (winget)
+winget install Docker.DockerDesktop
+# Restart your computer
+# Start Docker Desktop from Start Menu
+```
+
+```bash Ubuntu/Debian
+# Install prerequisites
+sudo apt-get update
+sudo apt-get install ca-certificates curl gnupg lsb-release
+
+# Add Docker's official GPG key
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+# Set up repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker Engine
+sudo apt-get update
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Add your user to docker group
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+```bash Fedora
+# Install Docker
+sudo dnf -y install dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+sudo dnf install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Start and enable Docker
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# Add your user to docker group
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+</CodeGroup>
+
+### Verify Docker Installation
+
+Confirm Docker is installed and running:
+
+```bash
+# Check Docker version
+docker --version
+# Expected: Docker version 24.0.0 or higher
+
+# Check Docker Compose version
+docker compose version
+# Expected: Docker Compose version v2.20.0 or higher
+
+# Test Docker
+docker run hello-world
+# Should download and run a test container
+```
+
+<Tip>
+If you see permission errors on Linux, make sure you've added your user to the `docker` group and logged out/in or run `newgrp docker`.
+</Tip>
+
+---
+
+## Installation Methods
+
+Choose the installation method that fits your use case.
+
+### Method 1: Docker Compose (Recommended)
+
+This is the **recommended** approach for most users. It runs all services in containers with zero manual configuration.
+
+**Pros:**
+- No local .NET or Node.js installation required
+- Consistent environment across all platforms
+- One command to start everything
+- Automatic service dependency management
+
+**Cons:**
+- Higher resource usage (all services in containers)
+- Slower code reload during development
+
+### Method 2: Hybrid (Docker Infrastructure + Local Services)
+
+Run infrastructure (PostgreSQL, Redis, Kafka) in Docker but run microservices locally for faster development iteration.
+
+**Pros:**
+- Fast code reload with `dotnet watch`
+- Lower resource usage (fewer containers)
+- Direct debugging in IDE
+
+**Cons:**
+- Requires .NET 9 SDK and Node.js installed
+- More complex setup
+- Manual service startup
+
+### Method 3: Full Local (Advanced)
+
+Run everything locally without Docker. Only recommended for advanced users or systems where Docker isn't available.
+
+**Pros:**
+- Maximum control
+- Lowest latency
+
+**Cons:**
+- Complex setup (PostgreSQL, Redis, Kafka installation)
+- Platform-specific issues
+- Manual dependency management
+
+<Warning>
+This guide focuses on **Method 1 (Docker Compose)**. For hybrid or full local setup, see the [Development Guide](/installation).
+</Warning>
+
+---
+
+## Installation Steps
+
+### Step 1: Clone the Repository
+
+Clone the SpecKit repository:
+
+<CodeGroup>
+
+```bash SSH
+git clone git@github.com:yourorg/speckit-ticketing.git
+cd speckit-ticketing
+```
+
+```bash HTTPS
+git clone https://github.com/yourorg/speckit-ticketing.git
+cd speckit-ticketing
+```
+
+```bash GitHub CLI
+gh repo clone yourorg/speckit-ticketing
+cd speckit-ticketing
+```
+
+</CodeGroup>
+
+### Step 2: Understand the Project Structure
+
+```
+speckit-ticketing/
+├── infra/                      # Infrastructure configuration
+│   ├── docker-compose.yml      # Service orchestration
+│   ├── db/
+│   │   └── init-schemas.sql    # Database schema initialization
+│   └── kafka-init.sh           # Kafka topic creation
+├── services/                   # Microservices
+│   ├── catalog/
+│   ├── inventory/
+│   ├── ordering/
+│   ├── payment/
+│   ├── fulfillment/
+│   ├── notification/
+│   └── identity/
+├── frontend/                   # Next.js application
+├── README.md
+└── FRONTEND_API_GUIDE.md
+```
+
+### Step 3: Navigate to Infrastructure Directory
+
+```bash
+cd infra
+```
+
+All Docker Compose commands should be run from the `infra/` directory.
+
+### Step 4: Review Docker Compose Configuration
+
+Before starting services, let's understand what `docker-compose.yml` configures:
+
+#### Infrastructure Services
+
+**PostgreSQL**
+```yaml
+postgres:
+  image: postgres:17
+  ports:
+    - "5432:5432"
+  environment:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    POSTGRES_DB: ticketing
+  volumes:
+    - postgres-data:/var/lib/postgresql/data
+    - ./db/init-schemas.sql:/docker-entrypoint-initdb.d/01-init-schemas.sql
+```
+
+- **Port**: 5432 (standard PostgreSQL port)
+- **Database**: `ticketing`
+- **Schemas**: `bc_identity`, `bc_catalog`, `bc_inventory`, `bc_ordering`, `bc_payment`, `bc_fulfillment`, `bc_notification`
+- **Persistence**: Data stored in Docker volume `postgres-data`
+
+**Redis**
+```yaml
+redis:
+  image: redis:7
+  ports:
+    - "6379:6379"
+```
+
+- **Port**: 6379 (standard Redis port)
+- **Usage**: Distributed locks, reservation TTL management
+
+**Kafka + Zookeeper**
+```yaml
+zookeeper:
+  image: confluentinc/cp-zookeeper:7.5.0
+  ports:
+    - "2181:2181"
+
+kafka:
+  image: confluentinc/cp-kafka:7.5.0
+  ports:
+    - "9092:9092"
+  depends_on:
+    - zookeeper
+```
+
+- **Kafka Port**: 9092
+- **Zookeeper Port**: 2181
+- **Topics**: `reservation-created`, `reservation-expired`, `payment-succeeded`, `payment-failed`, `ticket-issued`
+
+#### Application Services
+
+Each microservice follows this pattern:
+
+```yaml
+service-name:
+  build:
+    context: ..
+    dockerfile: services/service-name/src/Api/Dockerfile
+  ports:
+    - "PORT:PORT"
+  environment:
+    - ASPNETCORE_ENVIRONMENT=Development
+    - ConnectionStrings__Default=Host=postgres;Port=5432;Database=ticketing;Username=postgres;Password=postgres;SearchPath=bc_service;Include Error Detail=true
+    - Kafka__BootstrapServers=kafka:9092
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+```
+
+**Service Ports:**
+
+| Service | Port | URL |
+|---------|------|-----|
+| Identity | 50000 | http://localhost:50000 |
+| Catalog | 50001 | http://localhost:50001 |
+| Inventory | 50002 | http://localhost:50002 |
+| Ordering | 5003 | http://localhost:5003 |
+| Payment | 5004 | http://localhost:5004 |
+| Fulfillment | 50004 | http://localhost:50004 |
+| Notification | 50005 | http://localhost:50005 |
+| Frontend | 3000 | http://localhost:3000 |
+
+### Step 5: Start All Services
+
+Start the entire platform:
+
+```bash
+docker compose up -d
+```
+
+**What Happens:**
+
+<Steps>
+  <Step title="Image Download/Build">
+    Docker downloads base images (PostgreSQL, Redis, Kafka) and builds service images from Dockerfiles. First run takes 5-10 minutes.
+  </Step>
+  
+  <Step title="Network Creation">
+    Docker creates network `speckit-net` for inter-service communication.
+  </Step>
+  
+  <Step title="Volume Creation">
+    Docker creates volumes for PostgreSQL data and fulfillment storage.
+  </Step>
+  
+  <Step title="Infrastructure Startup">
+    PostgreSQL, Redis, and Kafka start and run health checks.
+  </Step>
+  
+  <Step title="Schema Initialization">
+    PostgreSQL runs `init-schemas.sql` to create all service schemas.
+  </Step>
+  
+  <Step title="Kafka Topics Creation">
+    `kafka-init` container creates required topics and exits.
+  </Step>
+  
+  <Step title="Service Startup">
+    Microservices start in dependency order (wait for healthy infrastructure).
+  </Step>
+  
+  <Step title="Frontend Startup">
+    Next.js app builds and starts on port 3000.
+  </Step>
+</Steps>
+
+### Step 6: Monitor Startup
+
+Watch logs to confirm successful startup:
+
+```bash
+# Follow all logs
+docker compose logs -f
+
+# Follow specific service
+docker compose logs -f catalog
+
+# Follow multiple services
+docker compose logs -f postgres kafka inventory
+```
+
+**Key Messages to Watch For:**
+
+✅ PostgreSQL:
+```
+LOG:  database system is ready to accept connections
+```
+
+✅ Redis:
+```
+Ready to accept connections tcp
+```
+
+✅ Kafka:
+```
+[KafkaServer id=1] started
+```
+
+✅ Kafka Topics:
+```
+Topics created successfully!
+```
+
+✅ Service (example - Catalog):
+```
+Now listening on: http://[::]:5001
+```
+
+<Tip>
+Press `Ctrl+C` to stop following logs. Services continue running in the background.
+</Tip>
+
+### Step 7: Verify Health
+
+Check all containers are running and healthy:
+
+```bash
+docker compose ps
+```
+
+**Expected output:**
+```
+NAME                      STATUS
+speckit-catalog           Up (healthy)
+speckit-fulfillment       Up (healthy)
+speckit-identity          Up (healthy)
+speckit-inventory         Up (healthy)
+speckit-kafka             Up (healthy)
+speckit-kafka-init        Exited (0)
+speckit-notification      Up (healthy)
+speckit-ordering          Up (healthy)
+speckit-payment           Up (healthy)
+speckit-postgres          Up (healthy)
+speckit-redis             Up (healthy)
+speckit-zookeeper         Up (healthy)
+speckit-frontend          Up
+```
+
+<Note>
+`kafka-init` shows `Exited (0)` - this is normal. It's a one-time initialization container.
+</Note>
+
+Test health endpoints:
+
+```bash
+# Test all services
+for port in 50000 50001 50002 5003 5004 50004 50005; do
+  echo "Testing port $port:"
+  curl -s http://localhost:$port/health | jq .
+done
+```
+
+**Expected response from each:**
+```json
+{
+  "status": "Healthy",
+  "service": "ServiceName"
+}
+```
+
+### Step 8: Access the Platform
+
+**Frontend:**
+Open http://localhost:3000 in your browser.
+
+**API Services:**
+All services expose REST APIs:
+
+- Catalog: http://localhost:50001
+- Inventory: http://localhost:50002
+- Ordering: http://localhost:5003
+- Payment: http://localhost:5004
+
+**Database:**
+Connect with any PostgreSQL client:
+
+```
+Host: localhost
+Port: 5432
+Database: ticketing
+Username: postgres
+Password: postgres
+```
+
+**Recommended Tools:**
+- [pgAdmin](https://www.pgadmin.org/)
+- [DBeaver](https://dbeaver.io/)
+- [TablePlus](https://tableplus.com/)
+- [psql CLI](https://www.postgresql.org/docs/current/app-psql.html)
+
+---
+
+## Environment Configuration
+
+### Connection Strings
+
+All connection strings are pre-configured in `docker-compose.yml`. You don't need to create `.env` files.
+
+**PostgreSQL (from host):**
+```
+Host=localhost;Port=5432;Database=ticketing;Username=postgres;Password=postgres;SearchPath=bc_<service>
+```
+
+**PostgreSQL (from container):**
+```
+Host=postgres;Port=5432;Database=ticketing;Username=postgres;Password=postgres;SearchPath=bc_<service>
+```
+
+**Redis (from host):**
+```
+localhost:6379
+```
+
+**Redis (from container):**
+```
+redis:6379
+```
+
+**Kafka (from host):**
+```
+localhost:9092
+```
+
+**Kafka (from container):**
+```
+kafka:9092
+```
+
+### Database Schemas
+
+Each service has its own PostgreSQL schema:
+
+| Schema | Service | Ownership |
+|--------|---------|----------|
+| `bc_identity` | Identity | User accounts, roles, tokens |
+| `bc_catalog` | Catalog | Events, venues, seats (read model) |
+| `bc_inventory` | Inventory | Reservations, seat availability |
+| `bc_ordering` | Ordering | Orders, carts, order items |
+| `bc_payment` | Payment | Payment records, transactions |
+| `bc_fulfillment` | Fulfillment | Tickets, QR codes, PDFs |
+| `bc_notification` | Notification | Email logs, notification queue |
+
+**Schema Initialization:**
+
+Schemas are created automatically on first startup via `infra/db/init-schemas.sql`:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS bc_identity;
+CREATE SCHEMA IF NOT EXISTS bc_catalog;
+CREATE SCHEMA IF NOT EXISTS bc_inventory;
+CREATE SCHEMA IF NOT EXISTS bc_ordering;
+CREATE SCHEMA IF NOT EXISTS bc_payment;
+CREATE SCHEMA IF NOT EXISTS bc_fulfillment;
+CREATE SCHEMA IF NOT EXISTS bc_notification;
+```
+
+**Migrations:**
+
+Each service runs EF Core migrations scoped to its schema:
+
+```bash
+# Example: Run migrations for Catalog service
+cd services/catalog/src/Api
+dotnet ef database update
+```
+
+<Warning>
+Never manually edit `init-schemas.sql` in production. Use EF Core migrations to manage schema changes.
+</Warning>
+
+### Kafka Topics
+
+Topics are created automatically by the `kafka-init` container:
+
+| Topic | Producer | Consumers | Purpose |
+|-------|----------|-----------|----------|
+| `reservation-created` | Inventory | Ordering | New seat reservation |
+| `reservation-expired` | Inventory | Ordering, Notification | Reservation TTL elapsed |
+| `payment-succeeded` | Payment | Ordering, Inventory, Fulfillment | Payment completed |
+| `payment-failed` | Payment | Ordering, Notification | Payment failed |
+| `ticket-issued` | Fulfillment | Notification | Ticket generated |
+
+**Topic Configuration:**
+
+```bash
+# List topics
+docker exec speckit-kafka kafka-topics --list --bootstrap-server localhost:9092
+
+# Describe a topic
+docker exec speckit-kafka kafka-topics --describe --topic reservation-created --bootstrap-server localhost:9092
+
+# Consume messages (debug)
+docker exec speckit-kafka kafka-console-consumer --bootstrap-server localhost:9092 --topic reservation-created --from-beginning
+```
+
+### Service Configuration
+
+Services are configured via environment variables in `docker-compose.yml`:
+
+**Common Environment Variables:**
+
+```yaml
+environment:
+  # ASP.NET Core
+  - ASPNETCORE_ENVIRONMENT=Development
+  - ASPNETCORE_URLS=http://+:5000
+  
+  # Database
+  - ConnectionStrings__Default=Host=postgres;Port=5432;Database=ticketing;Username=postgres;Password=postgres;SearchPath=bc_service
+  
+  # Redis (Inventory only)
+  - ConnectionStrings__Redis=redis:6379
+  
+  # Kafka
+  - Kafka__BootstrapServers=kafka:9092
+```
+
+**Service-Specific Variables:**
+
+**Notification Service:**
+```yaml
+- SmtpEmailOptions__UseDevMode=true
+- SmtpEmailOptions__SmtpServer=localhost
+- SmtpEmailOptions__SmtpPort=587
+- SmtpEmailOptions__FromEmail=noreply@ticketing.local
+```
+
+In development, emails are logged to console instead of sent.
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+#### Issue: Port Already in Use
+
+**Error:**
+```
+Error response from daemon: Ports are not available: exposing port TCP 0.0.0.0:5432 -> 0.0.0.0:0: listen tcp 0.0.0.0:5432: bind: address already in use
+```
+
+**Cause:** Another service (e.g., local PostgreSQL) is using the port.
+
+**Solution 1 - Stop conflicting service:**
+
+<CodeGroup>
+
+```bash macOS
+# Find process using port
+lsof -i :5432
+
+# Kill process (replace PID)
+kill -9 <PID>
+```
+
+```bash Linux
+# Find process using port
+sudo netstat -tulpn | grep :5432
+
+# Kill process (replace PID)
+kill -9 <PID>
+```
+
+```bash Windows (PowerShell)
+# Find process using port
+Get-NetTCPConnection -LocalPort 5432
+
+# Kill process (replace PID)
+Stop-Process -Id <PID> -Force
+```
+
+</CodeGroup>
+
+**Solution 2 - Change port mapping:**
+
+Edit `docker-compose.yml`:
+
+```yaml
+postgres:
+  ports:
+    - "15432:5432"  # Changed from 5432:5432
+```
+
+Update service connection strings to use `localhost:15432`.
+
+#### Issue: Services Fail Health Checks
+
+**Error:**
+```
+WARNING: Service "catalog" is unhealthy
+```
+
+**Diagnosis:**
+
+```bash
+# Check service logs
+docker compose logs catalog
+
+# Check container status
+docker inspect speckit-catalog
+
+# Test health endpoint manually
+curl http://localhost:50001/health
+```
+
+**Common Causes:**
+
+1. **Database migration failed**
+   ```
+   Npgsql.PostgresException: 42P01: relation "catalog.events" does not exist
+   ```
+   
+   **Fix:** Ensure `init-schemas.sql` ran successfully:
+   ```bash
+   docker compose logs postgres | grep "init-schemas.sql"
+   ```
+
+2. **Kafka not ready**
+   ```
+   Connection to Kafka failed: kafka:9092
+   ```
+   
+   **Fix:** Wait for Kafka to fully start:
+   ```bash
+   docker compose logs kafka | grep "started"
+   ```
+
+3. **Build failure**
+   ```
+   ERROR [internal] load metadata for mcr.microsoft.com/dotnet/aspnet:9.0
+   ```
+   
+   **Fix:** Rebuild images:
+   ```bash
+   docker compose build --no-cache
+   docker compose up -d
+   ```
+
+#### Issue: Database Connection Refused
+
+**Error:**
+```
+Npgsql.NpgsqlException: Failed to connect to [::1]:5432
+```
+
+**Cause:** PostgreSQL hasn't finished initializing.
+
+**Fix:**
+
+```bash
+# Wait for PostgreSQL to be ready
+docker compose logs postgres -f
+
+# Look for:
+# "database system is ready to accept connections"
+
+# Check health
+docker compose ps postgres
+# Should show: Up (healthy)
+```
+
+#### Issue: Kafka Topics Not Created
+
+**Error:**
+```
+Kafka topic 'reservation-created' does not exist
+```
+
+**Diagnosis:**
+
+```bash
+# Check kafka-init logs
+docker compose logs kafka-init
+
+# List topics
+docker exec speckit-kafka kafka-topics --list --bootstrap-server localhost:9092
+```
+
+**Fix:**
+
+```bash
+# Manually create topics
+docker exec speckit-kafka kafka-topics --create \
+  --if-not-exists \
+  --bootstrap-server localhost:9092 \
+  --replication-factor 1 \
+  --partitions 1 \
+  --topic reservation-created
+
+# Repeat for other topics:
+# reservation-expired, payment-succeeded, payment-failed, ticket-issued
+```
+
+#### Issue: Frontend Build Fails
+
+**Error:**
+```
+ERROR: failed to solve: process "/bin/sh -c npm run build" did not complete successfully
+```
+
+**Cause:** Missing environment variables or dependency issues.
+
+**Fix:**
+
+```bash
+# Check frontend build logs
+docker compose logs frontend
+
+# Rebuild with no cache
+docker compose build --no-cache frontend
+docker compose up -d frontend
+```
+
+#### Issue: High Memory Usage
+
+**Symptom:** System becomes slow, Docker uses excessive RAM.
+
+**Diagnosis:**
+
+```bash
+# Check container resource usage
+docker stats
+```
+
+**Fix:**
+
+Adjust Docker Desktop resource limits:
+
+**macOS/Windows:**
+1. Open Docker Desktop
+2. Settings → Resources
+3. Increase Memory limit to 8 GB minimum
+4. Click "Apply & Restart"
+
+**Linux:**
+
+Docker uses available system memory. Close other applications.
+
+#### Issue: "Reservation not found" in Ordering
+
+**Error:**
+```json
+{
+  "error": "Reservation not found"
+}
+```
+
+**Cause:** Kafka event hasn't propagated from Inventory to Ordering.
+
+**Fix:**
+
+Wait 2-3 seconds after creating reservation before adding to cart:
+
+```bash
+# Reserve seat
+curl -X POST http://localhost:50002/reservations -d '{...}'
+
+# WAIT
+sleep 3
+
+# Add to cart
+curl -X POST http://localhost:5003/cart/add -d '{...}'
+```
+
+**Verify event flow:**
+
+```bash
+# Consume reservation-created events
+docker exec speckit-kafka kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic reservation-created \
+  --from-beginning
+```
+
+### Reset Everything
+
+For a complete fresh start:
+
+```bash
+# Stop all containers
+docker compose down
+
+# Remove volumes (DELETES ALL DATA)
+docker compose down -v
+
+# Remove images (forces rebuild)
+docker compose down --rmi all
+
+# Remove everything including orphaned resources
+docker system prune -a --volumes
+
+# Start fresh
+docker compose up -d
+```
+
+<Warning>
+This deletes ALL data including database contents, reservations, orders, and tickets. Only use when you need a completely clean slate.
+</Warning>
+
+---
+
+## Production Considerations
+
+<Warning>
+The default configuration is **NOT production-ready**. The following sections outline required changes for production deployment.
+</Warning>
+
+### Security
+
+**1. Change Default Credentials**
+
+Never use default credentials in production:
+
+```yaml
+# DO NOT USE IN PRODUCTION:
+environment:
+  POSTGRES_PASSWORD: postgres  # ❌
+```
+
+**Use secrets management:**
+
+```yaml
+environment:
+  POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+secrets:
+  db_password:
+    external: true
+```
+
+**2. Enable TLS**
+
+Enable SSL for PostgreSQL, Redis, and Kafka:
+
+```yaml
+environment:
+  - ConnectionStrings__Default=Host=postgres;Port=5432;Database=ticketing;Username=postgres;Password=${DB_PASSWORD};SSL Mode=Require;Trust Server Certificate=true
+```
+
+**3. Network Isolation**
+
+Don't expose infrastructure ports publicly:
+
+```yaml
+postgres:
+  ports:
+    - "127.0.0.1:5432:5432"  # Only localhost
+  # Better: No ports exposed, use internal network
+```
+
+### Scalability
+
+**1. Separate Databases**
+
+Use separate PostgreSQL instances per service for true independence:
+
+```yaml
+postgres-catalog:
+  image: postgres:17
+  environment:
+    POSTGRES_DB: catalog
+
+postgres-inventory:
+  image: postgres:17
+  environment:
+    POSTGRES_DB: inventory
+```
+
+**2. Redis Cluster**
+
+Use Redis Cluster or Sentinel for high availability:
+
+```yaml
+redis:
+  image: redis:7-alpine
+  command: redis-server --appendonly yes --cluster-enabled yes
+```
+
+**3. Kafka Cluster**
+
+Deploy multi-broker Kafka cluster:
+
+```yaml
+kafka-1:
+  environment:
+    KAFKA_BROKER_ID: 1
+kafka-2:
+  environment:
+    KAFKA_BROKER_ID: 2
+kafka-3:
+  environment:
+    KAFKA_BROKER_ID: 3
+```
+
+**4. Horizontal Scaling**
+
+Scale services with multiple replicas:
+
+```bash
+# Scale Catalog service to 3 instances
+docker compose up -d --scale catalog=3
+```
+
+Requires load balancer (nginx, Traefik, or cloud LB).
+
+### Monitoring
+
+**1. Centralized Logging**
+
+Use ELK stack or cloud logging:
+
+```yaml
+catalog:
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+```
+
+**2. Metrics & Tracing**
+
+Enable OpenTelemetry exporters:
+
+```yaml
+environment:
+  - OpenTelemetry__Endpoint=http://jaeger:4317
+  - OpenTelemetry__ServiceName=catalog-service
+```
+
+**3. Health Monitoring**
+
+Use external health check services (Datadog, New Relic, etc.).
+
+### Backup
+
+**PostgreSQL Backup:**
+
+```bash
+# Automated daily backups
+docker exec speckit-postgres pg_dumpall -U postgres > backup_$(date +%Y%m%d).sql
+
+# Restore
+cat backup_20260304.sql | docker exec -i speckit-postgres psql -U postgres
+```
+
+**Redis Persistence:**
+
+Enable AOF (Append-Only File):
+
+```yaml
+redis:
+  command: redis-server --appendonly yes
+  volumes:
+    - redis-data:/data
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api/catalog/get-events">
+    Explore all available endpoints
+  </Card>
+  
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Deep dive into system design
+  </Card>
+  
+  <Card title="Development" icon="laptop-code" href="/installation">
+    Set up local development
+  </Card>
+  
+  <Card title="Deployment" icon="rocket" href="/guides/deployment">
+    Production deployment guide
+  </Card>
+</CardGroup>
+
+## Additional Resources
+
+- **[Quickstart Guide](/quickstart)** - Fast 5-minute setup
+- **[Frontend API Guide](https://github.com/yourrepo/FRONTEND_API_GUIDE.md)** - Complete API integration reference
+- **[Infrastructure README](https://github.com/yourrepo/infra/README.md)** - Operations guide
+- **[Smoke Test Script](https://github.com/yourrepo/smoke-test.sh)** - Automated testing
+
+<Tip>
+Join our community on Discord for help with installation issues and to share your SpecKit deployment stories!
+</Tip>

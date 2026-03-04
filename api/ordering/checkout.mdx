@@ -1,0 +1,369 @@
+---
+title: Checkout
+description: Complete the order and transition to pending payment
+---
+
+## Endpoint
+
+```http
+POST /orders/checkout
+```
+
+Checks out an order, transitioning it from `draft` state to `pending` state (ready for payment).
+
+## Base URL
+
+```
+http://localhost:5003
+```
+
+## Authentication
+
+**At least one required:**
+- `userId` - For authenticated users
+- `guestToken` - For anonymous/guest checkout
+
+The authentication credential must match the one used when adding items to the cart.
+
+## Request Body
+
+```json
+{
+  "orderId": "order-uuid-001",
+  "userId": "user-123",
+  "guestToken": null
+}
+```
+
+### Parameters
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `orderId` | UUID | **Yes** | ID of the order to checkout (from `/cart/add` response) |
+| `userId` | string | Conditional* | ID of the authenticated user |
+| `guestToken` | string | Conditional* | Token for anonymous checkout |
+
+*At least one of `userId` or `guestToken` must be provided and must match the value used when creating the order.
+
+## Response
+
+### Success Response (200 OK)
+
+```json
+{
+  "id": "order-uuid-001",
+  "userId": "user-123",
+  "guestToken": null,
+  "totalAmount": 50.00,
+  "state": "pending",
+  "createdAt": "2026-02-24T15:15:00Z",
+  "paidAt": "2026-02-24T15:16:30Z",
+  "items": [
+    {
+      "id": "item-001",
+      "seatId": "550e8400-e29b-41d4-a716-446655440002",
+      "price": 50.00
+    }
+  ]
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Unique order identifier |
+| `userId` | string \| null | User ID (null if guest) |
+| `guestToken` | string \| null | Guest token (null if authenticated) |
+| `totalAmount` | decimal | Total amount for all items in order |
+| `state` | string | Order state - will be `pending` after successful checkout |
+| `createdAt` | DateTime | Order creation timestamp |
+| `paidAt` | DateTime \| null | Payment timestamp |
+| `items` | array | Array of order items |
+| `items[].id` | UUID | Order item identifier |
+| `items[].seatId` | UUID | Seat identifier |
+| `items[].price` | decimal | Item price |
+
+## Order States
+
+The `state` field can have the following values:
+
+| State | Description |
+|-------|-------------|
+| `draft` | Cart created, waiting for checkout |
+| `pending` | **Checkout completed**, awaiting payment |
+| `completed` | Payment completed successfully |
+| `cancelled` | Order was cancelled |
+
+After successful checkout, the order will be in `pending` state.
+
+## Error Responses
+
+### 400 Bad Request - Missing Authentication
+
+```json
+{
+  "error": "Either UserId or GuestToken must be provided"
+}
+```
+
+Both `userId` and `guestToken` are null or empty.
+
+### 400 Bad Request - Invalid Order State
+
+```json
+{
+  "error": "Order is not in draft state"
+}
+```
+
+The order cannot be checked out because it's not in `draft` state. Only draft orders can be checked out.
+
+### 401 Unauthorized
+
+```json
+{
+  "error": "Unauthorized"
+}
+```
+
+The provided `userId` or `guestToken` does not match the order's owner.
+
+### 404 Not Found
+
+```json
+{
+  "error": "Order not found"
+}
+```
+
+No order exists with the provided `orderId`.
+
+## Examples
+
+### cURL - Authenticated User
+
+```bash
+curl -X POST http://localhost:5003/orders/checkout \
+  -H "Content-Type: application/json" \
+  -d '{
+    "orderId": "order-uuid-001",
+    "userId": "user-123"
+  }'
+```
+
+### cURL - Guest User
+
+```bash
+curl -X POST http://localhost:5003/orders/checkout \
+  -H "Content-Type: application/json" \
+  -d '{
+    "orderId": "order-uuid-001",
+    "guestToken": "guest-abc123xyz"
+  }'
+```
+
+### JavaScript/TypeScript
+
+```javascript
+async function checkout(orderId, userId) {
+  const response = await fetch('http://localhost:5003/orders/checkout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ orderId, userId })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Checkout failed');
+  }
+
+  return response.json();
+}
+
+// Usage
+try {
+  const order = await checkout(
+    'order-uuid-001',
+    'user-123'
+  );
+  console.log('Order state:', order.state); // "pending"
+  console.log('Total amount:', order.totalAmount);
+  console.log('Items:', order.items.length);
+} catch (error) {
+  console.error('Error:', error.message);
+}
+```
+
+### Complete Purchase Flow
+
+```javascript
+async function completePurchase(eventId, seatId, userId) {
+  try {
+    // 1. Get event details
+    const event = await fetch(
+      `http://localhost:50001/events/${eventId}/seatmap`
+    ).then(r => r.json());
+    
+    const seat = event.seats.find(s => s.id === seatId);
+    console.log('Event:', event.name);
+    console.log('Seat price:', seat.price);
+
+    // 2. Reserve seat
+    const reservation = await fetch(
+      'http://localhost:50002/reservations',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          seatId: seatId,
+          customerId: userId
+        })
+      }
+    ).then(r => r.json());
+    console.log('Reserved:', reservation.reservationId);
+
+    // 3. Wait for Kafka event processing
+    console.log('Waiting for event processing...');
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // 4. Add to cart
+    const order = await fetch('http://localhost:5003/cart/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reservationId: reservation.reservationId,
+        seatId: seatId,
+        price: seat.price,
+        userId: userId
+      })
+    }).then(r => r.json());
+    console.log('Cart created:', order.id);
+    console.log('State:', order.state); // "draft"
+
+    // 5. Checkout
+    const finalOrder = await fetch(
+      'http://localhost:5003/orders/checkout',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: order.id,
+          userId: userId
+        })
+      }
+    ).then(r => r.json());
+    
+    console.log('✅ Purchase complete!');
+    console.log('Order ID:', finalOrder.id);
+    console.log('State:', finalOrder.state); // "pending"
+    console.log('Total:', finalOrder.totalAmount);
+    
+    return finalOrder;
+  } catch (error) {
+    console.error('❌ Purchase failed:', error.message);
+    throw error;
+  }
+}
+
+// Usage
+completePurchase(
+  '550e8400-e29b-41d4-a716-446655440000', // eventId
+  '550e8400-e29b-41d4-a716-446655440002', // seatId
+  'user-123' // userId
+);
+```
+
+### Python
+
+```python
+import requests
+
+def checkout(order_id, user_id):
+    """Checkout an order"""
+    url = 'http://localhost:5003/orders/checkout'
+    payload = {
+        'orderId': order_id,
+        'userId': user_id
+    }
+    
+    response = requests.post(url, json=payload)
+    response.raise_for_status()
+    return response.json()
+
+# Usage
+try:
+    order = checkout(
+        order_id='order-uuid-001',
+        user_id='user-123'
+    )
+    print(f"Order state: {order['state']}")
+    print(f"Total: ${order['totalAmount']}")
+    print(f"Items: {len(order['items'])}")
+except requests.exceptions.RequestException as e:
+    print(f"Error: {e}")
+```
+
+### Bash Script - Complete Flow
+
+```bash
+#!/bin/bash
+
+EVENT_ID="550e8400-e29b-41d4-a716-446655440000"
+SEAT_ID="550e8400-e29b-41d4-a716-446655440002"
+USER_ID="user-123"
+
+# 1. Get event seatmap
+echo "1. Getting event seatmap..."
+EVENT=$(curl -s http://localhost:50001/events/$EVENT_ID/seatmap)
+PRICE=$(echo $EVENT | jq -r '.basePrice')
+echo "Price: $PRICE"
+
+# 2. Reserve seat
+echo "2. Reserving seat..."
+RESERVATION=$(curl -s -X POST http://localhost:50002/reservations \
+  -H "Content-Type: application/json" \
+  -d "{\"seatId\":\"$SEAT_ID\",\"customerId\":\"$USER_ID\"}")
+RESERVATION_ID=$(echo $RESERVATION | jq -r '.reservationId')
+echo "Reservation ID: $RESERVATION_ID"
+
+# 3. Wait for Kafka
+echo "3. Waiting for event processing (3 seconds)..."
+sleep 3
+
+# 4. Add to cart
+echo "4. Adding to cart..."
+ORDER=$(curl -s -X POST http://localhost:5003/cart/add \
+  -H "Content-Type: application/json" \
+  -d "{\"reservationId\":\"$RESERVATION_ID\",\"seatId\":\"$SEAT_ID\",\"price\":$PRICE,\"userId\":\"$USER_ID\"}")
+ORDER_ID=$(echo $ORDER | jq -r '.id')
+echo "Order ID: $ORDER_ID"
+
+# 5. Checkout
+echo "5. Checking out..."
+FINAL=$(curl -s -X POST http://localhost:5003/orders/checkout \
+  -H "Content-Type: application/json" \
+  -d "{\"orderId\":\"$ORDER_ID\",\"userId\":\"$USER_ID\"}")
+echo "Final order:"
+echo $FINAL | jq .
+```
+
+## Workflow
+
+Typical checkout flow:
+
+1. **Get Event** - `GET /events/{eventId}/seatmap` (Catalog service)
+2. **Reserve Seat** - `POST /reservations` (Inventory service)
+3. **Wait** - Wait 2-3 seconds for Kafka event processing
+4. **Add to Cart** - `POST /cart/add` (Ordering service)
+5. **Checkout** - `POST /orders/checkout` (**this endpoint**)
+
+After checkout:
+- Order state transitions from `draft` → `pending`
+- Order is ready for payment processing
+- Seats remain reserved until payment or expiration
+
+## Related Endpoints
+
+- [Add to Cart](/api/ordering/add-to-cart) - Add seats to cart
+- [Get Order](/api/ordering/get-order) - Retrieve order details

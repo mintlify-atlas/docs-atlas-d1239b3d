@@ -1,0 +1,334 @@
+---
+title: Identity Service
+description: Identity service for authentication and user management
+---
+
+## Overview
+
+The Identity service manages user authentication and authorization. It handles user registration, password management, and JWT token issuance for accessing protected resources across the platform.
+
+**Port:** 50000 (external), 5000 (internal)  
+**Database Schema:** `bc_identity`  
+**Dependencies:** PostgreSQL
+
+## Responsibilities
+
+- User registration and account creation
+- Password hashing and verification
+- JWT token generation and validation
+- User credential management
+- Serve as the authentication authority for all microservices
+
+## API Endpoints
+
+Endpoints are defined using minimal API style.
+
+### Issue Token (Login)
+
+<ParamField path="POST /token" type="endpoint">
+  Authenticates a user and issues a JWT token for subsequent API requests.
+</ParamField>
+
+**Request Body:**
+
+<ParamField body="Email" type="string" required>
+  User's email address
+</ParamField>
+
+<ParamField body="Password" type="string" required>
+  User's password
+</ParamField>
+
+```csharp title="~/workspace/source/services/identity/src/Identity.Api/Program.cs"
+app.MapPost("/token", async (
+    IssueTokenRequest request,
+    IssueTokenHandler handler) =>
+{
+    var result = await handler.Handle(
+        new IssueTokenCommand(request.Email, request.Password));
+
+    return Results.Ok(result);
+});
+
+public record IssueTokenRequest(string Email, string Password);
+```
+
+**Response (200 OK):**
+
+<ResponseField name="Token" type="string">
+  JWT access token
+</ResponseField>
+
+<ResponseField name="ExpiresAt" type="DateTime">
+  Token expiration timestamp (typically 2 hours from issuance)
+</ResponseField>
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "expiresAt": "2026-03-04T22:30:00Z"
+}
+```
+
+**Error Response (500):**
+
+```json
+{
+  "error": "Invalid credentials"
+}
+```
+
+## Domain Models
+
+### User
+
+Represents a user account in the system.
+
+<ResponseField name="Id" type="Guid">
+  Unique user identifier (auto-generated)
+</ResponseField>
+
+<ResponseField name="Email" type="string">
+  User's email address (unique)
+</ResponseField>
+
+<ResponseField name="PasswordHash" type="string">
+  Hashed password (never stored in plain text)
+</ResponseField>
+
+```csharp title="~/workspace/source/services/identity/src/Identity.Domain/Entities/User.cs"
+public class User
+{
+    public Guid Id { get; private set; }
+    public string Email { get; private set; } = string.Empty;
+    public string PasswordHash { get; private set; } = string.Empty;
+
+    private User() { }
+
+    public User(string email, string passwordHash)
+    {
+        Id = Guid.NewGuid();
+        Email = email;
+        PasswordHash = passwordHash;
+    }
+}
+```
+
+## Configuration
+
+### Database Connection
+
+```json title="appsettings.json"
+{
+  "ConnectionStrings": {
+    "Default": "Host=postgres;Port=5432;Database=ticketing;Username=postgres;Password=postgres;SearchPath=bc_identity"
+  }
+}
+```
+
+### JWT Configuration
+
+```json
+{
+  "Jwt": {
+    "Key": "dev-secret-key-minimum-32-chars-required-for-security",
+    "Issuer": "SpecKit.Identity",
+    "Audience": "SpecKit.Services"
+  }
+}
+```
+
+**JWT Settings:**
+- **Key**: Secret key for signing tokens (must be at least 32 characters)
+- **Issuer**: Token issuer identifier
+- **Audience**: Token audience (typically the service ecosystem)
+- **Expiry**: Tokens expire 2 hours after issuance
+
+## Use Cases
+
+### IssueToken
+
+Authenticates a user and issues a JWT token.
+
+```csharp title="~/workspace/source/services/identity/src/Identity.Application/UseCases/IssueToken/IssueTokenHandler.cs"
+public async Task<TokenResult> Handle(IssueTokenCommand command)
+{
+    // Find user by email
+    var user = await _userRepository.GetByEmailAsync(command.Email);
+
+    if (user is null)
+        throw new Exception("Invalid credentials");
+
+    // Verify password matches stored hash
+    if (!_passwordHasher.VerifyPassword(command.Password, user.PasswordHash))
+        throw new Exception("Invalid credentials");
+
+    // Generate JWT token
+    var expiresAt = DateTime.UtcNow.AddHours(2);
+    var token = _tokenGenerator.Generate(user);
+
+    return new TokenResult(token, expiresAt);
+}
+```
+
+### CreateUser
+
+Registers a new user account.
+
+```csharp title="~/workspace/source/services/identity/src/Identity.Application/UseCases/CreateUser/CreateUserHandler.cs"
+public async Task<Guid> Handle(CreateUserCommand command)
+{
+    // Verify user doesn't already exist
+    var existingUser = await _userRepository.GetByEmailAsync(command.Email);
+    if (existingUser is not null)
+        throw new Exception($"User with email {command.Email} already exists");
+
+    // Hash the password
+    var passwordHash = _passwordHasher.HashPassword(command.Password);
+
+    // Create user entity
+    var user = new User(command.Email, passwordHash);
+
+    // Save to database
+    await _userRepository.SaveAsync(user);
+
+    return user.Id;
+}
+```
+
+## Ports (Interfaces)
+
+The Identity service defines several domain ports:
+
+### IUserRepository
+
+Repository for user persistence.
+
+```csharp
+public interface IUserRepository
+{
+    Task<User?> GetByEmailAsync(string email);
+    Task SaveAsync(User user);
+}
+```
+
+### IPasswordHasher
+
+Password hashing and verification.
+
+```csharp
+public interface IPasswordHasher
+{
+    string HashPassword(string password);
+    bool VerifyPassword(string password, string hash);
+}
+```
+
+**Implementation:** Uses BCrypt or similar secure hashing algorithm.
+
+### ITokenGenerator
+
+JWT token generation.
+
+```csharp
+public interface ITokenGenerator
+{
+    string Generate(User user);
+}
+```
+
+**Implementation:** Generates JWT with user claims (Id, Email) signed with configured secret key.
+
+### IDbInitializer
+
+Database initialization and seeding.
+
+```csharp
+public interface IDbInitializer
+{
+    Task InitializeAsync();
+}
+```
+
+## Database Initialization
+
+On service startup, the Identity service:
+
+1. Runs database migrations to create schema and tables
+2. Seeds a test user for development:
+   - **Email**: `test@example.com`
+   - **Password**: `Password123!`
+
+```csharp title="Program.cs (startup)"
+using (var scope = app.Services.CreateScope())
+{
+    // Initialize database schema
+    var dbInitializer = scope.ServiceProvider.GetRequiredService<IDbInitializer>();
+    await dbInitializer.InitializeAsync();
+
+    // Seed test user
+    var createUserHandler = scope.ServiceProvider.GetRequiredService<CreateUserHandler>();
+    await createUserHandler.Handle(new CreateUserCommand("test@example.com", "Password123!"));
+    Console.WriteLine("✓ Usuario de prueba creado: test@example.com");
+}
+```
+
+## JWT Token Structure
+
+Generated JWT tokens include the following claims:
+
+- **sub** (subject): User ID (GUID)
+- **email**: User's email address
+- **iss** (issuer): `SpecKit.Identity`
+- **aud** (audience): `SpecKit.Services`
+- **exp** (expiration): Timestamp (2 hours from issuance)
+- **iat** (issued at): Timestamp
+
+## Authentication Flow
+
+1. **User submits credentials**: POST to `/token` with email and password
+2. **Validate user exists**: Query database for user by email
+3. **Verify password**: Hash provided password and compare with stored hash
+4. **Generate token**: Create JWT with user claims and 2-hour expiry
+5. **Return token**: Send JWT and expiry timestamp to client
+6. **Client stores token**: Typically in localStorage or httpOnly cookie
+7. **Subsequent requests**: Client includes JWT in `Authorization: Bearer <token>` header
+8. **Services validate token**: Other services verify JWT signature and claims
+
+## Security Considerations
+
+- **Password Hashing**: Passwords are hashed using BCrypt (or similar) before storage
+- **No plain-text passwords**: Passwords are never stored or logged in plain text
+- **JWT expiration**: Tokens expire after 2 hours to limit exposure window
+- **Secret key management**: JWT signing key should be rotated regularly in production
+- **HTTPS**: All authentication endpoints should be served over HTTPS in production
+
+## Architecture Notes
+
+- Uses **Minimal APIs** for endpoint registration (no controllers)
+- Uses **Ports and Adapters** pattern for infrastructure concerns
+- Infrastructure services registered via `AddInfrastructure()` extension method
+- Database initialization runs automatically on service startup
+- Supports seeding test users for development environments
+
+## Integration with Other Services
+
+Other microservices validate JWT tokens issued by the Identity service:
+
+1. Extract JWT from `Authorization` header
+2. Verify signature using shared JWT secret key
+3. Validate issuer, audience, and expiration claims
+4. Extract user ID and email from token claims
+5. Proceed with authorized request
+
+JWT configuration must match across all services:
+
+```json
+{
+  "Jwt": {
+    "Key": "dev-secret-key-minimum-32-chars-required-for-security",
+    "Issuer": "SpecKit.Identity",
+    "Audience": "SpecKit.Services"
+  }
+}
+```
