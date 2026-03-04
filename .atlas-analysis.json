@@ -108,7 +108,7 @@
     "GET /events - List all events",
     "GET /events/{id} - Get event details",
     "GET /events/{id}/seatmap - Get event with seat availability",
-    "POST /reservations - Reserve a seat (30min TTL)",
+    "POST /reservations - Reserve a seat (15-minute TTL)",
     "GET /reservations/{id} - Get reservation status",
     "POST /cart/add - Add reserved seat to cart",
     "POST /orders/checkout - Finalize order and trigger payment",
